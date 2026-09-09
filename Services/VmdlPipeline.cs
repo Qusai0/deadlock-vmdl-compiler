@@ -251,7 +251,8 @@ public static class VmdlPipeline
         string csdk12VmdlPath,
         string upgradedVmdlContent,
         string? cswinDir = null,
-        string? citadelAddonsDir = null)
+        string? citadelAddonsDir = null,
+        bool disableAnimationList = true)
     {
         var cfg = ConfigManager.LoadConfig();
         var useCsWinDir = !string.IsNullOrWhiteSpace(cswinDir) ? cswinDir : (!string.IsNullOrWhiteSpace(cfg.CsWinDir) ? cfg.CsWinDir : DefaultCsWinDir);
@@ -280,18 +281,22 @@ public static class VmdlPipeline
         var csdkVmdlDir = Path.GetDirectoryName(csdk12VmdlPath);
         Directory.CreateDirectory(csWinVmdlDir);
 
-        // 1. Sync mesh/model files (.dmx, .fbx, .smd, .obj, .vmat, .png) to CSWin64 so resourcecompiler finds them
+        // 1. Sync mesh/model files (.dmx, .fbx, .smd, .obj, .vmat, .png, .vanim) to CSWin64 so resourcecompiler finds them
         if (!string.IsNullOrEmpty(csdkVmdlDir) && Directory.Exists(csdkVmdlDir))
         {
-            var filesToCopy = Directory.EnumerateFiles(csdkVmdlDir, "*.*", SearchOption.TopDirectoryOnly)
-                .Where(f => {
-                    var ext = Path.GetExtension(f).ToLowerInvariant();
-                    return ext == ".dmx" || ext == ".fbx" || ext == ".smd" || ext == ".obj" || ext == ".vmat" || ext == ".png";
-                });
+            var allowedExts = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
+            {
+                ".dmx", ".fbx", ".smd", ".obj", ".vmat", ".png", ".vanim"
+            };
+
+            var filesToCopy = Directory.EnumerateFiles(csdkVmdlDir, "*.*", SearchOption.AllDirectories)
+                .Where(f => allowedExts.Contains(Path.GetExtension(f)));
 
             foreach (var srcFile in filesToCopy)
             {
-                var dstFile = Path.Combine(csWinVmdlDir, Path.GetFileName(srcFile));
+                var relFile = Path.GetRelativePath(csdkVmdlDir, srcFile);
+                var dstFile = Path.Combine(csWinVmdlDir, relFile);
+                Directory.CreateDirectory(Path.GetDirectoryName(dstFile)!);
                 if (!File.Exists(dstFile) || File.GetLastWriteTimeUtc(srcFile) > File.GetLastWriteTimeUtc(dstFile))
                 {
                     try { File.Copy(srcFile, dstFile, overwrite: true); } catch { }
@@ -300,7 +305,7 @@ public static class VmdlPipeline
         }
 
         // 2. Disable animation nodes (disabled = true) so CSWin64 doesn't fail on missing animation DMXs
-        var csWinContent = DisableAnimationNodesForCompilation(upgradedVmdlContent);
+        var csWinContent = DisableAnimationNodesForCompilation(upgradedVmdlContent, disableAnimationList);
 
         await File.WriteAllTextAsync(csWinVmdlPath, csWinContent);
 
@@ -376,7 +381,8 @@ public static class VmdlPipeline
         bool compileCsWin = true,
         bool revertVmdl = true,
         string? cswinDir = null,
-        string? citadelAddonsDir = null)
+        string? citadelAddonsDir = null,
+        bool disableAnimationList = true)
     {
         filepath = Path.GetFullPath(filepath);
         if (!File.Exists(filepath))
@@ -414,7 +420,8 @@ public static class VmdlPipeline
                 filepath,
                 upgradedContent,
                 cswinDir: cswinDir,
-                citadelAddonsDir: citadelAddonsDir
+                citadelAddonsDir: citadelAddonsDir,
+                disableAnimationList: disableAnimationList
             );
 
             if (!compSuccess)
@@ -538,9 +545,12 @@ public static class VmdlPipeline
         return (true, $"Exported model & {filesCopied} asset(s) to CSWin64 addon: {destVmdlPath}", filesCopied);
     }
 
-    public static string DisableAnimationNodesForCompilation(string content)
+    public static string DisableAnimationNodesForCompilation(string content, bool disableAnimationList = true)
     {
-        content = DisableNodeByClass(content, "AnimationList");
+        if (disableAnimationList)
+        {
+            content = DisableNodeByClass(content, "AnimationList");
+        }
         content = DisableNodeByClass(content, "EmptyAnimGraph");
         content = DisableNodeByClass(content, "AnimGraph");
         return content;
@@ -679,7 +689,10 @@ public static class VmdlPipeline
         return content;
     }
 
-    public static async Task<(bool Success, string Message)> SanitizeVmdlForModelDocAsync(string vmdlPath, bool createBackup = true)
+    public static async Task<(bool Success, string Message)> SanitizeVmdlForModelDocAsync(
+        string vmdlPath,
+        bool createBackup = true,
+        bool disableAnimationList = true)
     {
         vmdlPath = Path.GetFullPath(vmdlPath);
         if (!File.Exists(vmdlPath))
@@ -717,12 +730,22 @@ public static class VmdlPipeline
             changes.Add("Stripped standalone AnimGraph2 nodes");
         }
 
-        // 4. Ensure AnimationList is disabled = true (without deleting animations)
-        var disabledContent = DisableAnimationNodesForCompilation(content);
-        if (disabledContent != content)
+        // 4. Ensure AnimationList is disabled = true (without deleting animations) if requested
+        if (disableAnimationList)
         {
-            content = disabledContent;
-            changes.Add("Set disabled = true on AnimationList");
+            var disabledContent = DisableNodeByClass(content, "AnimationList");
+            if (disabledContent != content)
+            {
+                content = disabledContent;
+                changes.Add("Set disabled = true on AnimationList");
+            }
+        }
+
+        var disabledAnimGraphs = DisableNodeByClass(DisableNodeByClass(content, "EmptyAnimGraph"), "AnimGraph");
+        if (disabledAnimGraphs != content)
+        {
+            content = disabledAnimGraphs;
+            changes.Add("Disabled anim graph nodes");
         }
 
         await File.WriteAllTextAsync(vmdlPath, content);

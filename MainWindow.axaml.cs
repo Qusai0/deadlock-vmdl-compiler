@@ -56,6 +56,13 @@ public partial class MainWindow : Window
             ChkSkel.IsChecked = _config.ChkSkel;
             ChkGraph.IsChecked = _config.ChkGraph;
             ChkUiGraph.IsChecked = _config.ChkUiGraph;
+            ChkDisableAnimList.IsChecked = _config.ChkDisableAnimList;
+
+            ChkRevert.IsCheckedChanged += (_, _) => SaveConfig();
+            ChkSkel.IsCheckedChanged += (_, _) => SaveConfig();
+            ChkGraph.IsCheckedChanged += (_, _) => SaveConfig();
+            ChkUiGraph.IsCheckedChanged += (_, _) => SaveConfig();
+            ChkDisableAnimList.IsCheckedChanged += (_, _) => SaveConfig();
 
             // Environment validation on startup
             ValidateEnvironmentOnStartup();
@@ -375,6 +382,7 @@ public partial class MainWindow : Window
         _config.ChkSkel = ChkSkel.IsChecked == true;
         _config.ChkGraph = ChkGraph.IsChecked == true;
         _config.ChkUiGraph = ChkUiGraph.IsChecked == true;
+        _config.ChkDisableAnimList = ChkDisableAnimList.IsChecked == true;
 
         ConfigManager.SaveConfig(_config);
     }
@@ -676,7 +684,10 @@ public partial class MainWindow : Window
 
         try
         {
-            var (success, msg) = await VmdlPipeline.SanitizeVmdlForModelDocAsync(targetPath);
+            var (success, msg) = await VmdlPipeline.SanitizeVmdlForModelDocAsync(
+                targetPath,
+                disableAnimationList: ChkDisableAnimList.IsChecked == true
+            );
             Log(msg);
             if (success)
             {
@@ -863,7 +874,8 @@ public partial class MainWindow : Window
                 compileCsWin: true,
                 revertVmdl: ChkRevert.IsChecked == true,
                 cswinDir: csWinDir,
-                citadelAddonsDir: citadelDir
+                citadelAddonsDir: citadelDir,
+                disableAnimationList: ChkDisableAnimList.IsChecked == true
             );
 
             if (success)
