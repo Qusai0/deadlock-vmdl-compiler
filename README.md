@@ -42,6 +42,7 @@ Deadlock uses AnimGraph 2 (AG2) animation structures. Standard CSDK12 tooling ca
 - **inject nmskeleton**: Injects compiled vanilla .vnmskel reference before compiling.
 - **inject defaultanimgraph2**: Injects compiled hero .vnmgraph reference before compiling.
 - **inject ui animgraph2**: Injects compiled hero UI .vnmgraph reference before compiling.
+- **disable animationlist**: Disables AnimationList during compile to avoid missing animation DMX errors. Uncheck to opt out and preserve active animations.
 
 ### Visuals
 - **3D preview**: Interactive real-time 3D viewport with mesh rendering and camera controls.
