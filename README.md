@@ -5,7 +5,7 @@
 </p>
 
 <p align="center">
-  <img src="preview.png" alt="Deadlock AG2 Compiler Interface" width="850" />
+  <img src="screenshot.png" alt="Deadlock AG2 Compiler Interface" width="850" />
 </p>
 
 A specialized GUI compiler and asset pipeline tool for Valve's Deadlock (Source 2). Bypasses CSDK12 limitations by automating CSWin64 ModelDoc compilation, AnimGraph 2 (AG2) skeleton and graph reference injection, and dynamic cloth physics generation.
