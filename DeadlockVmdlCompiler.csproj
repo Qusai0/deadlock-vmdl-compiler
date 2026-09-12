@@ -13,6 +13,9 @@
     <Product>Deadlock AG2 Compiler</Product>
     <AssemblyTitle>Deadlock AG2 Compiler</AssemblyTitle>
     <Description>Deadlock AnimGraph2 nodes injection and compilation tool</Description>
+    <Version>1.2.1</Version>
+    <AssemblyVersion>1.2.1</AssemblyVersion>
+    <FileVersion>1.2.1</FileVersion>
   </PropertyGroup>
 
   <ItemGroup>

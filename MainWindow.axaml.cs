@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Diagnostics;
 using System.IO;
 using System.Linq;
 using System.Threading.Tasks;
@@ -20,6 +21,8 @@ public partial class MainWindow : Window
     private bool _isProcessing;
     private bool _isInitializing = true;
     private bool _isUpdatingSelection = false;
+    private int _logLineCount = 0;
+    private readonly System.Text.StringBuilder _logBuffer = new();
 
     private static readonly IBrush BrushOk = new SolidColorBrush(Color.FromRgb(0xDF, 0xE2, 0xE6));
     private static readonly IBrush BrushWarn = new SolidColorBrush(Color.FromRgb(0xBA, 0xBE, 0xC4));
@@ -148,12 +151,50 @@ public partial class MainWindow : Window
         CheckEnvironmentStatus();
     }
 
+    private void BtnClearLog_Click(object? sender, RoutedEventArgs e)
+    {
+        _logBuffer.Clear();
+        _logLineCount = 0;
+        TxtLog.Text = string.Empty;
+    }
+
+    private async void BtnCopyLog_Click(object? sender, RoutedEventArgs e)
+    {
+        var text = TxtLog.Text;
+        if (!string.IsNullOrEmpty(text))
+        {
+            var topLevel = TopLevel.GetTopLevel(this);
+            if (topLevel?.Clipboard != null)
+            {
+                await topLevel.Clipboard.SetTextAsync(text);
+                Log("[log] console text copied to clipboard");
+            }
+        }
+    }
+
     private void Log(string message)
     {
         Dispatcher.UIThread.Post(() =>
         {
             var timestamp = DateTime.Now.ToString("HH:mm:ss");
-            TxtLog.Text = (TxtLog.Text ?? string.Empty) + $"[{timestamp}] {message}\n";
+            var line = $"[{timestamp}] {message}";
+            _logBuffer.AppendLine(line);
+            _logLineCount++;
+
+            // Truncate buffer if exceedingly large (keep latest ~150k chars) to preserve UI responsiveness
+            if (_logBuffer.Length > 200_000)
+            {
+                var content = _logBuffer.ToString();
+                var splitIdx = content.IndexOf('\n', 50_000);
+                if (splitIdx > 0)
+                {
+                    _logBuffer.Clear();
+                    _logBuffer.Append(content.Substring(splitIdx + 1));
+                }
+            }
+
+            TxtLog.Text = _logBuffer.ToString();
+
             if (ChkAutoScroll?.IsChecked == true)
             {
                 ScrollLog?.ScrollToEnd();
@@ -859,7 +900,25 @@ public partial class MainWindow : Window
             BtnCompile.IsEnabled = false;
             TxtCompileBtn.Text = "compiling...";
 
-            Log($"starting compilation for: {Path.GetFileName(targetPath)}");
+            // Show real-time compilation progress bar under compile button
+            PanelCompileProgress.IsVisible = true;
+            PrgCompile.Value = 10;
+            LblCompilePercent.Text = "10%";
+            LblCompileStage.Text = "[1/5] preparing source";
+            LblCompileDetail.Text = Path.GetFileName(targetPath);
+
+            Log($"[compile] starting compilation for: {Path.GetFileName(targetPath)}");
+
+            var progress = new Progress<VmdlPipeline.CompileProgress>(p =>
+            {
+                Dispatcher.UIThread.Post(() =>
+                {
+                    PrgCompile.Value = p.Percent;
+                    LblCompilePercent.Text = $"{p.Percent}%";
+                    LblCompileStage.Text = p.Stage;
+                    LblCompileDetail.Text = p.Detail;
+                });
+            });
 
             var (success, msg) = await VmdlPipeline.ProcessVmdlFileAsync(
                 targetPath,
@@ -875,12 +934,19 @@ public partial class MainWindow : Window
                 revertVmdl: ChkRevert.IsChecked == true,
                 cswinDir: csWinDir,
                 citadelAddonsDir: citadelDir,
-                disableAnimationList: ChkDisableAnimList.IsChecked == true
+                disableAnimationList: ChkDisableAnimList.IsChecked == true,
+                progress: progress,
+                onLog: Log
             );
 
             if (success)
             {
-                Log($"compilation successful! {msg}");
+                PrgCompile.Value = 100;
+                LblCompilePercent.Text = "100%";
+                LblCompileStage.Text = "[5/5] complete";
+                LblCompileDetail.Text = "deployed successfully";
+
+                Log($"[compile success] {msg}");
 
                 var packVpk = await DialogService.ShowConfirmAsync(
                     this,
@@ -895,12 +961,18 @@ public partial class MainWindow : Window
             }
             else
             {
-                Log($"compilation failed: {msg}");
+                LblCompileStage.Text = "[error] failed";
+                LblCompileDetail.Text = msg;
+
+                Log($"[compile error] {msg}");
                 await DialogService.ShowErrorAsync(this, "compilation failed", $"compilation failed:\n\n{msg}");
             }
         }
         catch (Exception ex)
         {
+            LblCompileStage.Text = "[error] exception";
+            LblCompileDetail.Text = ex.Message;
+
             Log($"[compile exception] {ex.Message}");
             await DialogService.ShowErrorAsync(this, "compile exception", ex.Message);
         }
@@ -909,6 +981,60 @@ public partial class MainWindow : Window
             _isProcessing = false;
             BtnCompile.IsEnabled = true;
             TxtCompileBtn.Text = "compile";
+        }
+    }
+
+    private async void BtnLaunchGame_Click(object? sender, RoutedEventArgs e)
+    {
+        try
+        {
+            var deadlockInfo = DeadlockLocator.DetectDeadlockInstallation();
+            if (!deadlockInfo.IsValid || !File.Exists(deadlockInfo.DeadlockExePath))
+            {
+                Log("[launch error] could not locate deadlock.exe automatically.");
+                await DialogService.ShowErrorAsync(this, "deadlock not found", "could not locate deadlock.exe automatically.\nplease ensure deadlock is installed in your steam library.");
+                return;
+            }
+
+            // Check if the actual game instance is already running
+            var runningGame = Process.GetProcessesByName("deadlock")
+                .FirstOrDefault(p =>
+                {
+                    try
+                    {
+                        return string.Equals(p.MainModule?.FileName, deadlockInfo.DeadlockExePath, StringComparison.OrdinalIgnoreCase);
+                    }
+                    catch
+                    {
+                        return false;
+                    }
+                });
+
+            if (runningGame != null)
+            {
+                var launchAnother = await DialogService.ShowConfirmAsync(
+                    this,
+                    "deadlock already running",
+                    "an instance of deadlock game is already running.\n\nwould you like to launch another instance anyway?"
+                );
+                if (!launchAnother) return;
+            }
+
+            var psi = new ProcessStartInfo
+            {
+                FileName = deadlockInfo.DeadlockExePath,
+                Arguments = "-allowmultiple",
+                WorkingDirectory = Path.GetDirectoryName(deadlockInfo.DeadlockExePath)!,
+                UseShellExecute = true
+            };
+
+            Process.Start(psi);
+            Log($"[launch] started deadlock: {deadlockInfo.DeadlockExePath} -allowmultiple");
+        }
+        catch (Exception ex)
+        {
+            Log($"[launch error] {ex.Message}");
+            await DialogService.ShowErrorAsync(this, "launch failed", $"failed to launch deadlock:\n\n{ex.Message}");
         }
     }
 }
