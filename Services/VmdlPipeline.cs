@@ -252,7 +252,8 @@ public static class VmdlPipeline
         string upgradedVmdlContent,
         string? cswinDir = null,
         string? citadelAddonsDir = null,
-        bool disableAnimationList = true)
+        bool disableAnimationList = true,
+        bool autoDetectAnims = true)
     {
         var cfg = ConfigManager.LoadConfig();
         var useCsWinDir = !string.IsNullOrWhiteSpace(cswinDir) ? cswinDir : (!string.IsNullOrWhiteSpace(cfg.CsWinDir) ? cfg.CsWinDir : DefaultCsWinDir);
@@ -304,8 +305,45 @@ public static class VmdlPipeline
             }
         }
 
-        // 2. Disable animation nodes (disabled = true) so CSWin64 doesn't fail on missing animation DMXs
-        var csWinContent = DisableAnimationNodesForCompilation(upgradedVmdlContent, disableAnimationList);
+        // 2. Smart-disable: auto-detect animation files, disable only missing ones; or fall back to manual flag
+        string csWinContent;
+        string animStatusMsg;
+        if (autoDetectAnims)
+        {
+            var csWinAddonRoot = Path.Combine(useCsWinDir, "content", "csgo_addons", addonName);
+            // Derive CSDK addon root from the vmdl path
+            var csdkAddonRoot = string.Empty;
+            if (!string.IsNullOrEmpty(csdkVmdlDir))
+            {
+                var cleanPath = csdkVmdlDir.Replace('\\', '/');
+                var m = System.Text.RegularExpressions.Regex.Match(cleanPath,
+                    @"^(.+?/(citadel_addons|citadel_community_addons)/[^/]+)", System.Text.RegularExpressions.RegexOptions.IgnoreCase);
+                if (m.Success)
+                    csdkAddonRoot = m.Groups[1].Value.Replace('/', Path.DirectorySeparatorChar);
+            }
+
+            var (resolvedContent, foundCount, missingCount) = AutoDisableAnimationNodesForCompilation(
+                upgradedVmdlContent,
+                csdkVmdlDir ?? string.Empty,
+                csWinVmdlDir,
+                csdkAddonRoot,
+                csWinAddonRoot);
+
+            csWinContent = resolvedContent;
+            if (foundCount + missingCount > 0)
+                animStatusMsg = foundCount > 0
+                    ? $"[animations] auto-detected {foundCount} file(s) — animationlist preserved" +
+                      (missingCount > 0 ? $" ({missingCount} missing, disabled individually)" : "")
+                    : $"[animations] no animation files found ({missingCount} entries) — animationlist safely disabled";
+            else
+                animStatusMsg = "[animations] no animationlist node found — skipped";
+
+            _ = animStatusMsg; // logged by caller
+        }
+        else
+        {
+            csWinContent = DisableAnimationNodesForCompilation(upgradedVmdlContent, disableAnimationList);
+        }
 
         await File.WriteAllTextAsync(csWinVmdlPath, csWinContent);
 
@@ -382,7 +420,8 @@ public static class VmdlPipeline
         bool revertVmdl = true,
         string? cswinDir = null,
         string? citadelAddonsDir = null,
-        bool disableAnimationList = true)
+        bool disableAnimationList = true,
+        bool autoDetectAnims = true)
     {
         filepath = Path.GetFullPath(filepath);
         if (!File.Exists(filepath))
@@ -421,7 +460,8 @@ public static class VmdlPipeline
                 upgradedContent,
                 cswinDir: cswinDir,
                 citadelAddonsDir: citadelAddonsDir,
-                disableAnimationList: disableAnimationList
+                disableAnimationList: disableAnimationList,
+                autoDetectAnims: autoDetectAnims
             );
 
             if (!compSuccess)
@@ -554,6 +594,109 @@ public static class VmdlPipeline
         content = DisableNodeByClass(content, "EmptyAnimGraph");
         content = DisableNodeByClass(content, "AnimGraph");
         return content;
+    }
+
+    /// <summary>
+    /// Auto-detects animation source files on disk and selectively disables only
+    /// AnimFile nodes whose source_filename cannot be resolved. If no animation
+    /// files exist at all the whole AnimationList is disabled. Always disables
+    /// EmptyAnimGraph and AnimGraph nodes.
+    /// </summary>
+    public static (string Content, int FoundCount, int MissingCount) AutoDisableAnimationNodesForCompilation(
+        string content,
+        string csdkVmdlDir,
+        string csWinVmdlDir,
+        string csdkAddonRoot,
+        string csWinAddonRoot)
+    {
+        content = DisableNodeByClass(content, "EmptyAnimGraph");
+        content = DisableNodeByClass(content, "AnimGraph");
+
+        if (!content.Contains("AnimationList"))
+            return (content, 0, 0);
+
+        var animFilePattern = new Regex(@"_class\s*=\s*""AnimFile""", RegexOptions.IgnoreCase);
+        var sourcePattern = new Regex(@"source_filename\s*=\s*""([^""]+)""", RegexOptions.IgnoreCase);
+        var disabledLinePattern = new Regex(@"^[ \t]*disabled\s*=\s*(true|false)[ \t]*[\r\n]*", RegexOptions.Multiline | RegexOptions.IgnoreCase);
+
+        int foundCount = 0;
+        int missingCount = 0;
+
+        // Work in reverse order so string indices stay valid as we modify content
+        var allMatches = animFilePattern.Matches(content).Cast<Match>().Reverse().ToList();
+
+        foreach (var match in allMatches)
+        {
+            int classIdx = match.Index;
+
+            // Find the opening brace of this AnimFile block
+            int openBrace = -1;
+            for (int i = classIdx - 1; i >= 0; i--)
+            {
+                if (content[i] == '{') { openBrace = i; break; }
+                if (content[i] == '}') break;
+            }
+            if (openBrace == -1) continue;
+
+            // Find matching closing brace
+            int depth = 0, closeBrace = -1;
+            for (int i = openBrace; i < content.Length; i++)
+            {
+                if (content[i] == '{') depth++;
+                else if (content[i] == '}') { depth--; if (depth == 0) { closeBrace = i; break; } }
+            }
+            if (closeBrace == -1) continue;
+
+            var block = content.Substring(openBrace, closeBrace - openBrace + 1);
+            var sfMatch = sourcePattern.Match(block);
+            if (!sfMatch.Success) continue;
+
+            var sourceFilename = sfMatch.Groups[1].Value.Replace('\\', '/');
+            var baseName = Path.GetFileName(sourceFilename);
+            var relPath = sourceFilename.Replace('/', Path.DirectorySeparatorChar);
+
+            var candidates = new[]
+            {
+                Path.Combine(csWinAddonRoot, relPath),
+                Path.Combine(csWinVmdlDir, relPath),
+                Path.Combine(csWinVmdlDir, baseName),
+                Path.Combine(csWinVmdlDir, "clips", baseName),
+                Path.Combine(csWinVmdlDir, "anims", baseName),
+                Path.Combine(csdkAddonRoot, relPath),
+                Path.Combine(csdkVmdlDir, relPath),
+                Path.Combine(csdkVmdlDir, baseName),
+                Path.Combine(csdkVmdlDir, "clips", baseName),
+                Path.Combine(csdkVmdlDir, "anims", baseName),
+            };
+
+            bool fileExists = candidates.Any(File.Exists);
+
+            // Strip any existing disabled= line from the block first
+            var cleanedBlock = disabledLinePattern.Replace(block, string.Empty);
+
+            if (fileExists)
+            {
+                foundCount++;
+                // Ensure no disabled=true is present (file exists, keep it active)
+                content = content.Remove(openBrace, closeBrace - openBrace + 1).Insert(openBrace, cleanedBlock);
+            }
+            else
+            {
+                missingCount++;
+                // Inject disabled = true right after _class = "AnimFile"
+                var disabledBlock = Regex.Replace(cleanedBlock,
+                    @"(_class\s*=\s*""AnimFile"")",
+                    "$1\n\t\t\t\t\t\tdisabled = true",
+                    RegexOptions.IgnoreCase, TimeSpan.FromSeconds(5));
+                content = content.Remove(openBrace, closeBrace - openBrace + 1).Insert(openBrace, disabledBlock);
+            }
+        }
+
+        // If no animation files found at all, disable the whole AnimationList to be safe
+        if (foundCount == 0 && missingCount > 0)
+            content = DisableNodeByClass(content, "AnimationList");
+
+        return (content, foundCount, missingCount);
     }
 
     private static string DisableNodeByClass(string content, string className)
