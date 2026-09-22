@@ -247,6 +247,66 @@ public static class VmdlPipeline
         return (string.Join("\n", lines), changes);
     }
 
+    public record CompileProgress(
+        int Step,
+        int TotalSteps,
+        int Percent,
+        string Stage,
+        string Detail
+    );
+
+    private static bool IsCompilerNoiseLine(string rawLine, out string? cleanedLine)
+    {
+        cleanedLine = null;
+        if (string.IsNullOrWhiteSpace(rawLine))
+            return true;
+
+        var line = rawLine.Trim();
+
+        // 1. Missing material references & illegal resource loaders (CSWin64 does not host Deadlock materials)
+        if (line.Contains("missing material", StringComparison.OrdinalIgnoreCase) ||
+            line.Contains("referencing missing material", StringComparison.OrdinalIgnoreCase) ||
+            (line.Contains("Trying to load an illegal resource name", StringComparison.OrdinalIgnoreCase) && line.Contains(".vmat", StringComparison.OrdinalIgnoreCase)))
+        {
+            return true;
+        }
+
+        // 2. Generic warning headers produced when materials are missing
+        if (line.Contains("Compile WARNINGS", StringComparison.OrdinalIgnoreCase) ||
+            line.Contains("These may represent problems, but will not cause the compile to fail", StringComparison.OrdinalIgnoreCase) ||
+            line.Contains("Look for \"RESOURCE COMPILE WARNING:\"", StringComparison.OrdinalIgnoreCase))
+        {
+            return true;
+        }
+
+        // 3. Dashed or equal sign horizontal separator lines
+        if (line.Length >= 5 && line.All(c => c == '-' || c == '='))
+        {
+            return true;
+        }
+
+        // 4. "RESOURCE COMPILE WARNING:" specifically for .vmat
+        if (line.Contains("RESOURCE COMPILE WARNING:", StringComparison.OrdinalIgnoreCase) &&
+            line.Contains(".vmat", StringComparison.OrdinalIgnoreCase))
+        {
+            return true;
+        }
+
+        // 5. If summary line has "WARNING: 1 compiled, 0 failed...", strip the "WARNING: " prefix
+        if (line.Contains("compiled,", StringComparison.OrdinalIgnoreCase) && line.Contains("failed,", StringComparison.OrdinalIgnoreCase))
+        {
+            if (line.StartsWith("WARNING:", StringComparison.OrdinalIgnoreCase))
+            {
+                line = line.Substring("WARNING:".Length).Trim();
+            }
+            cleanedLine = line;
+            return false;
+        }
+
+        cleanedLine = line;
+        return false;
+    }
+
     public static async Task<(bool Success, string Message)> CompileViaCsWinAndDeployAsync(
         string csdk12VmdlPath,
         string upgradedVmdlContent,
@@ -285,14 +345,19 @@ public static class VmdlPipeline
         // 1. Sync mesh/model files (.dmx, .fbx, .smd, .obj, .vmat, .png, .vanim) to CSWin64 so resourcecompiler finds them
         if (!string.IsNullOrEmpty(csdkVmdlDir) && Directory.Exists(csdkVmdlDir))
         {
+            progress?.Report(new CompileProgress(2, 5, 25, "[2/5] syncing assets", "scanning model assets..."));
+            onLog?.Invoke("[sync] scanning for model assets (.dmx, .fbx, .smd, .vmat, .png, .vanim)...");
+
             var allowedExts = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
             {
                 ".dmx", ".fbx", ".smd", ".obj", ".vmat", ".png", ".vanim"
             };
 
             var filesToCopy = Directory.EnumerateFiles(csdkVmdlDir, "*.*", SearchOption.AllDirectories)
-                .Where(f => allowedExts.Contains(Path.GetExtension(f)));
+                .Where(f => allowedExts.Contains(Path.GetExtension(f)))
+                .ToList();
 
+            int copied = 0;
             foreach (var srcFile in filesToCopy)
             {
                 var relFile = Path.GetRelativePath(csdkVmdlDir, srcFile);
@@ -300,52 +365,30 @@ public static class VmdlPipeline
                 Directory.CreateDirectory(Path.GetDirectoryName(dstFile)!);
                 if (!File.Exists(dstFile) || File.GetLastWriteTimeUtc(srcFile) > File.GetLastWriteTimeUtc(dstFile))
                 {
-                    try { File.Copy(srcFile, dstFile, overwrite: true); } catch { }
+                    try
+                    {
+                        File.Copy(srcFile, dstFile, overwrite: true);
+                        copied++;
+                        progress?.Report(new CompileProgress(
+                            2,
+                            5,
+                            25 + (int)(20.0 * copied / Math.Max(1, filesToCopy.Count)),
+                            "[2/5] syncing assets",
+                            relFile
+                        ));
+                        onLog?.Invoke($"[sync] copied: {relFile}");
+                    }
+                    catch { }
                 }
             }
+            onLog?.Invoke($"[sync] synchronized {copied} updated asset(s) to cswin64");
         }
 
-        // 2. Smart-disable: auto-detect animation files, disable only missing ones; or fall back to manual flag
-        string csWinContent;
-        string animStatusMsg;
-        if (autoDetectAnims)
-        {
-            var csWinAddonRoot = Path.Combine(useCsWinDir, "content", "csgo_addons", addonName);
-            // Derive CSDK addon root from the vmdl path
-            var csdkAddonRoot = string.Empty;
-            if (!string.IsNullOrEmpty(csdkVmdlDir))
-            {
-                var cleanPath = csdkVmdlDir.Replace('\\', '/');
-                var m = System.Text.RegularExpressions.Regex.Match(cleanPath,
-                    @"^(.+?/(citadel_addons|citadel_community_addons)/[^/]+)", System.Text.RegularExpressions.RegexOptions.IgnoreCase);
-                if (m.Success)
-                    csdkAddonRoot = m.Groups[1].Value.Replace('/', Path.DirectorySeparatorChar);
-            }
-
-            var (resolvedContent, foundCount, missingCount) = AutoDisableAnimationNodesForCompilation(
-                upgradedVmdlContent,
-                csdkVmdlDir ?? string.Empty,
-                csWinVmdlDir,
-                csdkAddonRoot,
-                csWinAddonRoot);
-
-            csWinContent = resolvedContent;
-            if (foundCount + missingCount > 0)
-                animStatusMsg = foundCount > 0
-                    ? $"[animations] auto-detected {foundCount} file(s) — animationlist preserved" +
-                      (missingCount > 0 ? $" ({missingCount} missing, disabled individually)" : "")
-                    : $"[animations] no animation files found ({missingCount} entries) — animationlist safely disabled";
-            else
-                animStatusMsg = "[animations] no animationlist node found — skipped";
-
-            _ = animStatusMsg; // logged by caller
-        }
-        else
-        {
-            csWinContent = DisableAnimationNodesForCompilation(upgradedVmdlContent, disableAnimationList);
-        }
+        // 2. Disable animation nodes (disabled = true) so CSWin64 doesn't fail on missing animation DMXs
+        var csWinContent = DisableAnimationNodesForCompilation(upgradedVmdlContent, disableAnimationList);
 
         await File.WriteAllTextAsync(csWinVmdlPath, csWinContent);
+        onLog?.Invoke("[prepare] wrote temporary modeldoc definition to cswin64 addon");
 
         var psi = new ProcessStartInfo
         {
@@ -357,19 +400,52 @@ public static class VmdlPipeline
             CreateNoWindow = true
         };
 
-        using var proc = new Process { StartInfo = psi };
+        progress?.Report(new CompileProgress(4, 5, 60, "[4/5] compiling model", "resourcecompiler.exe"));
+        onLog?.Invoke($"[compiler] starting: resourcecompiler.exe -f -i \"{Path.GetFileName(csWinVmdlPath)}\"");
+
+        var outputLines = new List<string>();
+        var errorLines = new List<string>();
+        var rawLines = new List<string>();
+
+        using var proc = new Process { StartInfo = psi, EnableRaisingEvents = true };
+        proc.OutputDataReceived += (s, e) =>
+        {
+            if (e.Data != null)
+            {
+                rawLines.Add(e.Data);
+                if (!IsCompilerNoiseLine(e.Data, out var cleaned))
+                {
+                    outputLines.Add(cleaned!);
+                    progress?.Report(new CompileProgress(4, 5, 75, "[4/5] compiling model", cleaned!));
+                    onLog?.Invoke($"[cswin64] {cleaned!}");
+                }
+            }
+        };
+        proc.ErrorDataReceived += (s, e) =>
+        {
+            if (e.Data != null)
+            {
+                rawLines.Add(e.Data);
+                if (!IsCompilerNoiseLine(e.Data, out var cleaned))
+                {
+                    errorLines.Add(cleaned!);
+                    progress?.Report(new CompileProgress(4, 5, 75, "[4/5] compiling model", cleaned!));
+                    onLog?.Invoke($"[cswin64 err] {cleaned!}");
+                }
+            }
+        };
+
         proc.Start();
+        proc.BeginOutputReadLine();
+        proc.BeginErrorReadLine();
 
-        var outputTask = proc.StandardOutput.ReadToEndAsync();
-        var errorTask = proc.StandardError.ReadToEndAsync();
         await proc.WaitForExitAsync();
-
-        var output = await outputTask;
-        var error = await errorTask;
 
         if (proc.ExitCode != 0)
         {
-            var msg = !string.IsNullOrWhiteSpace(error) ? error : output;
+            var msg = errorLines.Count > 0 
+                ? string.Join("\n", errorLines) 
+                : (outputLines.Count > 0 ? string.Join("\n", outputLines) : string.Join("\n", rawLines));
             return (false, $"CSWin64 Compiler error (code {proc.ExitCode}): {msg.Trim()}");
         }
 
@@ -378,6 +454,8 @@ public static class VmdlPipeline
         {
             return (false, $"Compiler finished but .vmdl_c was not created at: {csWinCompiledVmdlc}");
         }
+
+        progress?.Report(new CompileProgress(5, 5, 90, "[5/5] deploying model", Path.GetFileName(csWinCompiledVmdlc)));
 
         string csdk12GameVmdlc;
         var cleanPath = csdk12VmdlPath.Replace('\\', '/');
@@ -403,6 +481,9 @@ public static class VmdlPipeline
         Directory.CreateDirectory(Path.GetDirectoryName(csdk12GameVmdlc)!);
         File.Copy(csWinCompiledVmdlc, csdk12GameVmdlc, overwrite: true);
 
+        var vmdlcSize = new FileInfo(csdk12GameVmdlc).Length;
+        onLog?.Invoke($"[deploy] deployed .vmdl_c ({vmdlcSize / 1024:N0} KB) to: {csdk12GameVmdlc}");
+
         return (true, $"Compiled via CSWin64 & deployed .vmdl_c to: {csdk12GameVmdlc}");
     }
 
@@ -420,12 +501,13 @@ public static class VmdlPipeline
         bool revertVmdl = true,
         string? cswinDir = null,
         string? citadelAddonsDir = null,
-        bool disableAnimationList = true,
-        bool autoDetectAnims = true)
+        bool disableAnimationList = true)
     {
         filepath = Path.GetFullPath(filepath);
         if (!File.Exists(filepath))
             return (false, $"File not found: {filepath}");
+
+        progress?.Report(new CompileProgress(1, 5, 10, "[1/5] preparing source", Path.GetFileName(filepath)));
 
         var (defSkel, defGraph, defUiGraph) = DeriveDefaultPaths(filepath);
         var useSkel = !string.IsNullOrWhiteSpace(skelPath) ? skelPath : defSkel;
@@ -445,10 +527,16 @@ public static class VmdlPipeline
             upgradeHeader: upgradeHeader
         );
 
+        if (changes.Count > 0)
+        {
+            onLog?.Invoke($"[ag2] upgraded syntax: {string.Join(", ", changes)}");
+        }
+
         if (createBackup)
         {
             var bakFile = filepath + ".bak";
             File.Copy(filepath, bakFile, overwrite: true);
+            onLog?.Invoke($"[backup] created backup: {Path.GetFileName(bakFile)}");
         }
 
         var stepLogs = new List<string>();
@@ -460,8 +548,7 @@ public static class VmdlPipeline
                 upgradedContent,
                 cswinDir: cswinDir,
                 citadelAddonsDir: citadelAddonsDir,
-                disableAnimationList: disableAnimationList,
-                autoDetectAnims: autoDetectAnims
+                disableAnimationList: disableAnimationList
             );
 
             if (!compSuccess)
@@ -470,16 +557,23 @@ public static class VmdlPipeline
             stepLogs.Add(compMsg);
         }
 
+        progress?.Report(new CompileProgress(5, 5, 95, "[5/5] finalizing", revertVmdl ? "reverting vmdl" : "saving vmdl"));
+
         if (revertVmdl)
         {
             await File.WriteAllTextAsync(filepath, origContent);
             stepLogs.Add("Reverted CSDK12 VMDL to pre-upgrade format (ModelDoc compatible)");
+            onLog?.Invoke("[revert] reverted working .vmdl file back to original clean format");
         }
         else
         {
             await File.WriteAllTextAsync(filepath, upgradedContent);
             stepLogs.Add($"Saved upgraded VMDL ({string.Join(", ", changes)})");
+            onLog?.Invoke($"[save] saved upgraded .vmdl with ag2 node injections");
         }
+
+        progress?.Report(new CompileProgress(5, 5, 100, "[5/5] complete", "model compiled and deployed successfully"));
+        onLog?.Invoke($"[success] compilation finished successfully for {Path.GetFileName(filepath)}!");
 
         return (true, string.Join(" | ", stepLogs));
     }

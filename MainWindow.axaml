@@ -212,24 +212,75 @@
                     </StackPanel>
                 </Border>
 
-                <!-- Main Action Button: Compile -->
-                <Button x:Name="BtnCompile"
-                        Classes="primary"
-                        Height="46"
-                        Margin="0,2,0,0"
-                        Click="BtnCompile_Click"
-                        HorizontalAlignment="Stretch"
-                        VerticalAlignment="Center"
-                        HorizontalContentAlignment="Center">
-                    <StackPanel Orientation="Horizontal" HorizontalAlignment="Center" VerticalAlignment="Center" Spacing="10">
-                        <Viewbox Width="16" Height="16" VerticalAlignment="Center">
-                            <Canvas Width="24" Height="24">
-                                <Path Data="M 7 4.5 C 7 3.6 8 3.1 8.8 3.6 L 19.8 10.6 C 20.5 11.1 20.5 12.1 19.8 12.6 L 8.8 19.6 C 8 20.1 7 19.6 7 18.7 Z" Fill="#FFFFFF"/>
-                            </Canvas>
-                        </Viewbox>
-                        <TextBlock x:Name="TxtCompileBtn" Text="compile" FontWeight="Bold" FontSize="14" VerticalAlignment="Center"/>
-                    </StackPanel>
-                </Button>
+                <!-- Main Action Row: Compile + Launch Game -->
+                <Grid ColumnDefinitions="*,8,135" Margin="0,2,0,0">
+                    <Button x:Name="BtnCompile"
+                            Classes="primary"
+                            Height="46"
+                            Click="BtnCompile_Click"
+                            HorizontalAlignment="Stretch"
+                            VerticalAlignment="Center"
+                            HorizontalContentAlignment="Center">
+                        <StackPanel Orientation="Horizontal" HorizontalAlignment="Center" VerticalAlignment="Center" Spacing="10">
+                            <Viewbox Width="16" Height="16" VerticalAlignment="Center">
+                                <Canvas Width="24" Height="24">
+                                    <Path Data="M 7 4.5 C 7 3.6 8 3.1 8.8 3.6 L 19.8 10.6 C 20.5 11.1 20.5 12.1 19.8 12.6 L 8.8 19.6 C 8 20.1 7 19.6 7 18.7 Z" Fill="#FFFFFF"/>
+                                </Canvas>
+                            </Viewbox>
+                            <TextBlock x:Name="TxtCompileBtn" Text="compile" FontWeight="Bold" FontSize="14" VerticalAlignment="Center"/>
+                        </StackPanel>
+                    </Button>
+
+                    <Button x:Name="BtnLaunchGame"
+                            Grid.Column="2"
+                            Height="46"
+                            Click="BtnLaunchGame_Click"
+                            HorizontalAlignment="Stretch"
+                            VerticalAlignment="Center"
+                            HorizontalContentAlignment="Center"
+                            ToolTip.Tip="launch deadlock (-allowmultiple)">
+                        <TextBlock Text="launch game" FontWeight="Bold" FontSize="14" VerticalAlignment="Center" HorizontalAlignment="Center"/>
+                    </Button>
+                </Grid>
+
+                <!-- Real-Time Minimalist Compilation Progress -->
+                <StackPanel x:Name="PanelCompileProgress"
+                            IsVisible="False"
+                            Margin="0,5,0,0"
+                            Spacing="3">
+                    <ProgressBar x:Name="PrgCompile"
+                                 Height="3"
+                                 Minimum="0"
+                                 Maximum="100"
+                                 Value="0"
+                                 Foreground="#3B82F6"
+                                 Background="#1A2230"
+                                 CornerRadius="1.5"/>
+                    <Grid ColumnDefinitions="*,Auto" Margin="1,0">
+                        <StackPanel Orientation="Horizontal" Spacing="6" VerticalAlignment="Center">
+                            <TextBlock x:Name="LblCompileStage"
+                                       Text="[1/5] preparing source"
+                                       FontSize="10"
+                                       FontWeight="SemiBold"
+                                       Foreground="#60A5FA"
+                                       VerticalAlignment="Center"/>
+                            <TextBlock x:Name="LblCompileDetail"
+                                       Text="starting..."
+                                       FontSize="9.5"
+                                       Foreground="#64748B"
+                                       TextTrimming="CharacterEllipsis"
+                                       MaxWidth="320"
+                                       VerticalAlignment="Center"/>
+                        </StackPanel>
+                        <TextBlock x:Name="LblCompilePercent"
+                                   Grid.Column="1"
+                                   Text="0%"
+                                   FontSize="10"
+                                   FontWeight="SemiBold"
+                                   Foreground="#94A3B8"
+                                   VerticalAlignment="Center"/>
+                    </Grid>
+                </StackPanel>
             </StackPanel>
 
             <!-- RIGHT PANEL: 3D Preview Box -->
@@ -279,6 +330,7 @@
                 </StackPanel>
             </Button>
 
+            <!-- Advanced Settings & Paths Content Panel -->
             <Border x:Name="PanelAdvancedContent"
                     IsVisible="False"
                     Background="#1A2230"
@@ -369,9 +421,15 @@
                     <Border Height="1" Background="#2D394E" Margin="0,4"/>
 
                     <!-- Log Console Header -->
-                    <Grid ColumnDefinitions="*,Auto">
+                    <Grid ColumnDefinitions="*,Auto,Auto,Auto">
                         <TextBlock Text="log console" FontSize="11" FontWeight="Bold" Foreground="#94A3B8" VerticalAlignment="Center"/>
-                        <CheckBox x:Name="ChkAutoScroll" Grid.Column="1" Content="auto-scroll" IsChecked="True" FontSize="11" VerticalAlignment="Center"/>
+                        <Button x:Name="BtnClearLog" Grid.Column="1" Height="22" Padding="6,1" Margin="0,0,6,0" Click="BtnClearLog_Click" VerticalAlignment="Center">
+                            <TextBlock Text="clear" FontSize="10.5" VerticalAlignment="Center"/>
+                        </Button>
+                        <Button x:Name="BtnCopyLog" Grid.Column="2" Height="22" Padding="6,1" Margin="0,0,8,0" Click="BtnCopyLog_Click" VerticalAlignment="Center">
+                            <TextBlock Text="copy" FontSize="10.5" VerticalAlignment="Center"/>
+                        </Button>
+                        <CheckBox x:Name="ChkAutoScroll" Grid.Column="3" Content="auto-scroll" IsChecked="True" FontSize="11" VerticalAlignment="Center"/>
                     </Grid>
 
                     <!-- Terminal Log Area -->
@@ -385,7 +443,8 @@
                                      FontSize="11.5"
                                      IsReadOnly="True"
                                      TextWrapping="Wrap"
-                                     AcceptsReturn="True"/>
+                                     AcceptsReturn="True"
+                                     Padding="6,4"/>
                         </ScrollViewer>
                     </Border>
 
