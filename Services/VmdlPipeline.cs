@@ -313,7 +313,9 @@ public static class VmdlPipeline
         string? cswinDir = null,
         string? citadelAddonsDir = null,
         bool disableAnimationList = true,
-        bool autoDetectAnims = true)
+        bool autoDetectAnims = true,
+        IProgress<CompileProgress>? progress = null,
+        Action<string>? onLog = null)
     {
         var cfg = ConfigManager.LoadConfig();
         var useCsWinDir = !string.IsNullOrWhiteSpace(cswinDir) ? cswinDir : (!string.IsNullOrWhiteSpace(cfg.CsWinDir) ? cfg.CsWinDir : DefaultCsWinDir);
@@ -339,7 +341,7 @@ public static class VmdlPipeline
 
         var csWinVmdlPath = Path.Combine(useCsWinDir, "content", "csgo_addons", addonName, subpath);
         var csWinVmdlDir = Path.GetDirectoryName(csWinVmdlPath)!;
-        var csdkVmdlDir = Path.GetDirectoryName(csdk12VmdlPath);
+        var csdkVmdlDir = Path.GetDirectoryName(csdk12VmdlPath) ?? string.Empty;
         Directory.CreateDirectory(csWinVmdlDir);
 
         // 1. Sync mesh/model files (.dmx, .fbx, .smd, .obj, .vmat, .png, .vanim) to CSWin64 so resourcecompiler finds them
@@ -384,8 +386,50 @@ public static class VmdlPipeline
             onLog?.Invoke($"[sync] synchronized {copied} updated asset(s) to cswin64");
         }
 
-        // 2. Disable animation nodes (disabled = true) so CSWin64 doesn't fail on missing animation DMXs
-        var csWinContent = DisableAnimationNodesForCompilation(upgradedVmdlContent, disableAnimationList);
+        // 2. Smart-disable: auto-detect animation files, disable only missing ones; or fall back to manual flag
+        string csWinContent;
+        if (autoDetectAnims)
+        {
+            string csdkAddonRoot = string.Empty;
+            var normCsdk = csdk12VmdlPath.Replace('\\', '/');
+            var addonMarker = $"/content/{container}/{addonName}/";
+            var markerIdx = normCsdk.IndexOf(addonMarker, StringComparison.OrdinalIgnoreCase);
+            if (markerIdx >= 0)
+            {
+                csdkAddonRoot = normCsdk[..(markerIdx + addonMarker.Length - 1)].Replace('/', Path.DirectorySeparatorChar);
+            }
+            else if (!string.IsNullOrWhiteSpace(useCitadelDir))
+            {
+                csdkAddonRoot = Path.Combine(useCitadelDir, addonName);
+            }
+
+            var csWinAddonRoot = Path.Combine(useCsWinDir, "content", "csgo_addons", addonName);
+
+            var (detectedContent, foundCount, missingCount) = AutoDisableAnimationNodesForCompilation(
+                upgradedVmdlContent,
+                csdkVmdlDir,
+                csWinVmdlDir,
+                csdkAddonRoot,
+                csWinAddonRoot
+            );
+            csWinContent = detectedContent;
+            if (foundCount > 0)
+            {
+                onLog?.Invoke($"[anims] auto-detected {foundCount} animation file(s) (missing: {missingCount}) - keeping animationlist enabled");
+            }
+            else if (missingCount > 0)
+            {
+                onLog?.Invoke($"[anims] no animation files found on disk ({missingCount} missing) - safely disabled animationlist");
+            }
+        }
+        else
+        {
+            csWinContent = DisableAnimationNodesForCompilation(upgradedVmdlContent, disableAnimationList);
+            if (disableAnimationList)
+            {
+                onLog?.Invoke("[anims] animationlist disabled via option");
+            }
+        }
 
         await File.WriteAllTextAsync(csWinVmdlPath, csWinContent);
         onLog?.Invoke("[prepare] wrote temporary modeldoc definition to cswin64 addon");
@@ -501,7 +545,10 @@ public static class VmdlPipeline
         bool revertVmdl = true,
         string? cswinDir = null,
         string? citadelAddonsDir = null,
-        bool disableAnimationList = true)
+        bool disableAnimationList = true,
+        bool autoDetectAnims = true,
+        IProgress<CompileProgress>? progress = null,
+        Action<string>? onLog = null)
     {
         filepath = Path.GetFullPath(filepath);
         if (!File.Exists(filepath))
@@ -548,7 +595,10 @@ public static class VmdlPipeline
                 upgradedContent,
                 cswinDir: cswinDir,
                 citadelAddonsDir: citadelAddonsDir,
-                disableAnimationList: disableAnimationList
+                disableAnimationList: disableAnimationList,
+                autoDetectAnims: autoDetectAnims,
+                progress: progress,
+                onLog: onLog
             );
 
             if (!compSuccess)
