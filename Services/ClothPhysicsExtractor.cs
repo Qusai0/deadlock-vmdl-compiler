@@ -4,7 +4,6 @@ using System.IO;
 using System.Linq;
 using System.Text;
 using System.Text.RegularExpressions;
-using SteamDatabase.ValvePak;
 
 namespace DeadlockVmdlCompiler.Services;
 

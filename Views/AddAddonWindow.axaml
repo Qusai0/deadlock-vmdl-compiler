@@ -1,0 +1,43 @@
+<Window xmlns="https://github.com/avaloniaui"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        x:Class="DeadlockVmdlCompiler.Views.AddAddonWindow"
+        Title="add addon"
+        Icon="avares://DeadlockVmdlCompiler/AppIcon.ico"
+        Width="500" MinWidth="460"
+        SizeToContent="Height" CanResize="False"
+        WindowStartupLocation="CenterOwner"
+        Background="#161B24">
+    <Border BorderBrush="#2D394E" BorderThickness="1" Padding="20">
+        <StackPanel Spacing="12">
+            <TextBlock Text="add addon" FontSize="16" FontWeight="Bold" Foreground="#FFFFFF"/>
+            <TextBlock Text="Export the main hero model and its dependencies from Deadlock into a new CSDK12 addon."
+                       TextWrapping="Wrap" FontSize="11.5" Foreground="#CBD5E1"/>
+
+            <StackPanel Spacing="4">
+                <TextBlock Text="character" FontSize="11.5" FontWeight="SemiBold" Foreground="#E2E8F0"/>
+                <ComboBox x:Name="CmbHero" Height="32" HorizontalAlignment="Stretch"/>
+            </StackPanel>
+
+            <StackPanel Spacing="4">
+                <TextBlock Text="addon name" FontSize="11.5" FontWeight="SemiBold" Foreground="#E2E8F0"/>
+                <TextBox x:Name="TxtAddonName" Height="32" Watermark="my_hero_mod"/>
+                <TextBlock Text="Lowercase letters, digits and underscores; start with a letter."
+                           FontSize="10.5" Foreground="#AAB5C5"/>
+            </StackPanel>
+
+            <TextBlock x:Name="TxtError" IsVisible="False" TextWrapping="Wrap"
+                       FontSize="11" Foreground="#FCA5A5"/>
+            <StackPanel x:Name="PanelProgress" IsVisible="False" Spacing="5">
+                <ProgressBar Height="4" IsIndeterminate="True"/>
+                <TextBlock x:Name="TxtProgress" Text="Preparing export..." TextWrapping="Wrap"
+                           FontSize="11" Foreground="#CBD5E1"/>
+            </StackPanel>
+
+            <StackPanel Orientation="Horizontal" HorizontalAlignment="Right" Spacing="8" Margin="0,4,0,0">
+                <Button x:Name="BtnCancel" Content="cancel" MinWidth="86" Click="BtnCancel_Click"/>
+                <Button x:Name="BtnCreate" Content="create addon" Classes="primary"
+                        MinWidth="110" Click="BtnCreate_Click"/>
+            </StackPanel>
+        </StackPanel>
+    </Border>
+</Window>

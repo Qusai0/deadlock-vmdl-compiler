@@ -12,6 +12,7 @@ using Avalonia.Platform.Storage;
 using Avalonia.Threading;
 using DeadlockVmdlCompiler.Models;
 using DeadlockVmdlCompiler.Services;
+using DeadlockVmdlCompiler.Views;
 
 namespace DeadlockVmdlCompiler;
 
@@ -983,6 +984,68 @@ public partial class MainWindow : Window
             var packed = await MakeVpkAsync(suppressSuccessDialog: false);
             if (!packed && !string.IsNullOrWhiteSpace(targetPath))
                 await OfferProtectionReleaseAfterFailedPackAsync(targetPath, TxtCitadelPath.Text?.Trim());
+        }
+        finally
+        {
+            _isProcessing = false;
+        }
+    }
+
+    private async void BtnAddAddon_Click(object? sender, RoutedEventArgs e)
+    {
+        if (_isProcessing) return;
+        var contentAddonsDir = TxtCitadelPath.Text?.Trim();
+        if (string.IsNullOrWhiteSpace(contentAddonsDir) || !Directory.Exists(contentAddonsDir))
+        {
+            await DialogService.ShowErrorAsync(this, "CSDK12 folder required",
+                "Select CSDK12's content/citadel_addons folder before creating an addon.");
+            return;
+        }
+
+        var deadlockInfo = DeadlockLocator.DetectDeadlockInstallation();
+        string? vpkPath = deadlockInfo.IsValid ? deadlockInfo.Pak01VpkPath : null;
+        if (vpkPath == null)
+        {
+            var files = await StorageProvider.OpenFilePickerAsync(new FilePickerOpenOptions
+            {
+                Title = "select Deadlock pak01_dir.vpk",
+                FileTypeFilter = new[]
+                {
+                    new FilePickerFileType("Deadlock VPK (*.vpk)")
+                    {
+                        Patterns = new[] { "pak01_dir.vpk", "*.vpk" }
+                    }
+                }
+            });
+            if (files.Count == 0) return;
+            vpkPath = files[0].Path.LocalPath;
+        }
+
+        try
+        {
+            _isProcessing = true;
+            var dialog = new AddAddonWindow(contentAddonsDir, vpkPath, Log);
+            await dialog.ShowDialog(this);
+            if (dialog.Result is not { } result) return;
+
+            Log($"[add addon] created {result.Name}: {result.FileCount} files, " +
+                $"{result.ClothFileCount} cloth assets; model: {result.MainVmdlPath}");
+            RescanModels();
+            var addon = _discoveredAddons.FirstOrDefault(a =>
+                a.Name.Equals(result.Name, StringComparison.OrdinalIgnoreCase));
+            if (addon != null)
+            {
+                CmbDiscovered.SelectedItem = addon;
+                var model = addon.HeroModels.FirstOrDefault(m =>
+                    m.FullPath.Equals(result.MainVmdlPath, StringComparison.OrdinalIgnoreCase));
+                if (model != null) CmbTargetVmdl.SelectedItem = model;
+            }
+            SaveConfig();
+        }
+        catch (Exception ex)
+        {
+            Log($"[add addon error] {ex.Message}");
+            await DialogService.ShowErrorAsync(this, "Addon creation failed", ex.Message);
         }
         finally
         {

@@ -38,7 +38,7 @@
                     <StackPanel Spacing="6">
                         
                         <!-- Row 1: Discovered Addon -->
-                        <Grid ColumnDefinitions="145,*,Auto">
+                        <Grid ColumnDefinitions="145,*,Auto,Auto">
                             <StackPanel Grid.Column="0" VerticalAlignment="Center">
                                 <TextBlock Text="discovered addon:" FontSize="11.5" FontWeight="SemiBold" Foreground="#E2E8F0" VerticalAlignment="Center"/>
                                 <TextBlock x:Name="LblDiscoveredCount" Text="scanning..." FontSize="10" Foreground="#94A3B8" VerticalAlignment="Center"/>
@@ -80,6 +80,9 @@
                                     <TextBlock Text="rescan" FontSize="11" VerticalAlignment="Center"/>
                                 </StackPanel>
                             </Button>
+                            <Button x:Name="BtnAddAddon" Grid.Column="3" Height="32" Padding="10,2"
+                                    Margin="6,0,0,0" Content="+ add addon" Classes="primary"
+                                    Click="BtnAddAddon_Click"/>
                         </Grid>
 
                         <!-- Row 2: Target VMDL File -->

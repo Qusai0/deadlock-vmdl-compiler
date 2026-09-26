@@ -147,7 +147,13 @@ try
     Check(File.ReadAllText(vmdl + ".bak") == bareModel, "Original backup was overwritten.");
     Check(File.Exists(vmdl + ".bak.1"), "Second backup was not created.");
 
-    var deadlockVpk = Environment.GetEnvironmentVariable("DEADLOCK_TEST_VPK");
+    Check(AddonCreationService.ValidateName("my_hero_mod") == null, "Valid addon name was rejected.");
+    Check(AddonCreationService.ValidateName("../bad") != null &&
+          AddonCreationService.ValidateName("_hidden") != null,
+        "Unsafe addon name was accepted.");
+
+    var deadlockVpk = args.FirstOrDefault(a => !a.StartsWith("--", StringComparison.Ordinal)) ??
+                      Environment.GetEnvironmentVariable("DEADLOCK_TEST_VPK");
     if (!string.IsNullOrWhiteSpace(deadlockVpk))
     {
         var heroBytes = VpkHeroScanner.ExtractFileFromVpk(deadlockVpk,
@@ -170,6 +176,70 @@ try
         Check(missingGraph?.Contains("DefaultAnimGraph2") == true,
             "Compiled AG2 verification accepted a missing graph.");
         Console.WriteLine("Deadlock VPK AG2 smoke check passed.");
+
+        if (args.Contains("--addon-export"))
+        {
+            var csdkRoot = Path.Combine(root, "test_csdk12");
+            var contentAddons = Path.Combine(csdkRoot, "content", "citadel_addons");
+            var gameAddons = Path.Combine(csdkRoot, "game", "citadel_addons");
+            Directory.CreateDirectory(contentAddons);
+            Directory.CreateDirectory(gameAddons);
+            var hero = DeadlockHeroCatalog.GetHeroes().Single(h => h.HeroKey == "wraith");
+            var addon = await AddonCreationService.CreateAsync(contentAddons, deadlockVpk,
+                hero, "wraith_export_test", onLog: Console.WriteLine);
+            Check(File.Exists(addon.MainVmdlPath), "Main hero ModelDoc was not exported.");
+            Check(File.Exists(Path.Combine(addon.ContentDirectory,
+                "models", "heroes_wip", "wraith", "wraith.vmdl")),
+                "Main model lost its VPK-relative path.");
+            Check(Directory.Exists(addon.GameDirectory), "CSDK12 game addon directory is missing.");
+            var modelDmx = Directory.EnumerateFiles(addon.ContentDirectory, "*model.dmx", SearchOption.AllDirectories)
+                .FirstOrDefault();
+            Check(modelDmx != null, "Main model mesh DMX was not exported.");
+            var dmxText = System.Text.Encoding.Latin1.GetString(File.ReadAllBytes(modelDmx!));
+            var materialPaths = Regex.Matches(dmxText, @"[A-Za-z0-9_./-]+\.vmat\b")
+                .Select(m => m.Value).Distinct().ToArray();
+            Check(materialPaths.Length > 0 && materialPaths.All(path =>
+                    File.Exists(Path.Combine(addon.ContentDirectory, path.Replace('/', Path.DirectorySeparatorChar)))),
+                "A referenced material is missing or lost its VPK-relative path.");
+            Check(Directory.EnumerateFiles(addon.ContentDirectory, "*.vmat", SearchOption.AllDirectories).Any(),
+                "Material dependencies were not exported.");
+            Check(Directory.EnumerateFiles(addon.ContentDirectory, "*.png", SearchOption.AllDirectories).Any(),
+                "Material texture dependencies were not exported.");
+            Check(Directory.EnumerateFiles(addon.ContentDirectory, "*.dmx", SearchOption.AllDirectories).Any(),
+                "Model or animation DMX dependencies were not exported.");
+            Check(addon.ClothFileCount >= 2, "Cloth proxy and grid were not exported.");
+            Check(VmdlScanner.ScanAddons(contentAddons).Any(a => a.Name == "wraith_export_test"),
+                "New addon is absent from the application list.");
+            var duplicateRejected = false;
+            try
+            {
+                await AddonCreationService.CreateAsync(contentAddons, deadlockVpk,
+                    hero, "wraith_export_test");
+            }
+            catch (IOException) { duplicateRejected = true; }
+            Check(duplicateRejected, "Existing addon was overwritten.");
+            Check(!Directory.EnumerateDirectories(contentAddons, ".creating-*").Any() &&
+                  !Directory.EnumerateDirectories(gameAddons, ".creating-*").Any(),
+                "Temporary addon directories remained after export.");
+
+            using var cancellation = new CancellationTokenSource();
+            cancellation.Cancel();
+            var cancelled = false;
+            try
+            {
+                await AddonCreationService.CreateAsync(contentAddons, deadlockVpk,
+                    hero, "cancelled_export_test", cancellationToken: cancellation.Token);
+            }
+            catch (OperationCanceledException) { cancelled = true; }
+            Check(cancelled &&
+                  !Directory.Exists(Path.Combine(contentAddons, "cancelled_export_test")) &&
+                  !Directory.Exists(Path.Combine(gameAddons, "cancelled_export_test")) &&
+                  !Directory.EnumerateDirectories(contentAddons, ".creating-*").Any() &&
+                  !Directory.EnumerateDirectories(gameAddons, ".creating-*").Any(),
+                "Cancelled export left an addon or temporary directories.");
+            Console.WriteLine($"Wraith addon export passed: {addon.FileCount} files, " +
+                              $"{addon.ClothFileCount} cloth assets.");
+        }
     }
 }
 finally
