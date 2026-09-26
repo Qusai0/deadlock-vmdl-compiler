@@ -244,7 +244,9 @@ public static class VmdlPipeline
         Action<string>? onLog = null,
         string? expectedSkelPath = null,
         string? expectedGraphPath = null,
-        string? expectedUiGraphPath = null)
+        string? expectedUiGraphPath = null,
+        Action<string>? beforeDeploy = null,
+        Action<string, string>? afterDeploy = null)
     {
         var cfg = ConfigManager.LoadConfig();
         var useCsWinDir = !string.IsNullOrWhiteSpace(cswinDir) ? cswinDir : (!string.IsNullOrWhiteSpace(cfg.CsWinDir) ? cfg.CsWinDir : DefaultCsWinDir);
@@ -420,7 +422,9 @@ public static class VmdlPipeline
         }
 
         Directory.CreateDirectory(Path.GetDirectoryName(csdk12GameVmdlc)!);
+        beforeDeploy?.Invoke(csdk12GameVmdlc);
         File.Copy(csWinCompiledVmdlc, csdk12GameVmdlc, overwrite: true);
+        afterDeploy?.Invoke(csdk12GameVmdlc, csWinCompiledVmdlc);
 
         var vmdlcSize = new FileInfo(csdk12GameVmdlc).Length;
         onLog?.Invoke($"[deploy] deployed .vmdl_c ({vmdlcSize / 1024:N0} KB) to: {csdk12GameVmdlc}");
@@ -508,7 +512,9 @@ public static class VmdlPipeline
         string? citadelAddonsDir = null,
         bool disableAnimationList = true,
         IProgress<CompileProgress>? progress = null,
-        Action<string>? onLog = null)
+        Action<string>? onLog = null,
+        Action<string>? beforeDeploy = null,
+        Action<string, string>? afterDeploy = null)
     {
         filepath = Path.GetFullPath(filepath);
         if (!File.Exists(filepath))
@@ -563,7 +569,9 @@ public static class VmdlPipeline
                 onLog: onLog,
                 expectedSkelPath: addSkel ? useSkel : null,
                 expectedGraphPath: addGraph ? useGraph : null,
-                expectedUiGraphPath: addUiGraph ? useUiGraph : null
+                expectedUiGraphPath: addUiGraph ? useUiGraph : null,
+                beforeDeploy: beforeDeploy,
+                afterDeploy: afterDeploy
             );
 
             if (!compSuccess)

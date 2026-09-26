@@ -7,6 +7,23 @@ static void Check(bool condition, string message)
     if (!condition) throw new Exception(message);
 }
 
+static bool IsWriteBlocked(Action write)
+{
+    try
+    {
+        write();
+        return false;
+    }
+    catch (IOException)
+    {
+        return true;
+    }
+    catch (UnauthorizedAccessException)
+    {
+        return true;
+    }
+}
+
 static int Count(string text, string token) => Regex.Matches(text, Regex.Escape(token)).Count;
 
 const string header = "<!-- kv3 encoding:text:version{e21c7f3c-8a33-41c5-9977-a76d3a32aa0d} format:modeldoc40:version{12fc9d44-453a-4ae4-b4d9-7e2ac0bbd4e0} -->";
@@ -67,6 +84,51 @@ try
     var gameDir = Path.Combine(root, "game");
     var modelDir = Path.Combine(gameDir, "models", "heroes_staging", "demo");
     Directory.CreateDirectory(modelDir);
+
+    var deployedModel = Path.Combine(modelDir, "protected.vmdl_c");
+    var compilerOutput = Path.Combine(root, "compiler-output.vmdl_c");
+    var compiledBytes = new byte[] { 0x11, 0x22, 0x33, 0x44 };
+    File.WriteAllBytes(deployedModel, compiledBytes);
+    File.WriteAllBytes(compilerOutput, compiledBytes);
+    using (CompiledModelProtection.Acquire(deployedModel, compilerOutput))
+    {
+        Check(File.ReadAllBytes(deployedModel).SequenceEqual(compiledBytes),
+            "Protected model could not be read while packaging.");
+        var protectedVpk = Path.Combine(root, "protected_pak01_dir.vpk");
+        var protectedPack = await VpkBuilder.PackAddonToVpkAsync(gameDir, protectedVpk);
+        Check(protectedPack.Success, "VPK packaging could not read a protected model.");
+        var protectedBytes = VpkHeroScanner.ExtractFileFromVpk(protectedVpk,
+            "models/heroes_staging/demo/protected.vmdl_c");
+        Check(protectedBytes != null && protectedBytes.SequenceEqual(compiledBytes),
+            "Protected model changed while being packaged.");
+        Check(IsWriteBlocked(() =>
+        {
+            using var stream = new FileStream(deployedModel, FileMode.Open, FileAccess.Write, FileShare.ReadWrite);
+            stream.WriteByte(0xFF);
+        }), "FileStream write was allowed while the model was protected.");
+        Check(IsWriteBlocked(() => File.WriteAllBytes(deployedModel, new byte[] { 0xFF })),
+            "File.WriteAllBytes was allowed while the model was protected.");
+        var replacement = Path.Combine(root, "replacement.vmdl_c");
+        File.WriteAllBytes(replacement, new byte[] { 0xFF });
+        Check(IsWriteBlocked(() => File.Move(replacement, deployedModel, overwrite: true)),
+            "Atomic replacement was allowed while the model was protected.");
+    }
+
+    using (var writable = new FileStream(deployedModel, FileMode.Open, FileAccess.Write, FileShare.ReadWrite))
+        writable.WriteByte(0x55);
+
+    File.WriteAllBytes(compilerOutput, new byte[] { 0x99, 0x22, 0x33, 0x44 });
+    var mismatchRejected = false;
+    try
+    {
+        using var _ = CompiledModelProtection.Acquire(deployedModel, compilerOutput);
+    }
+    catch (InvalidDataException)
+    {
+        mismatchRejected = true;
+    }
+    Check(mismatchRejected, "Protection accepted a compiler output that differs from the deployed model.");
+
     var original = new byte[] { 0x56, 0x50, 0x4b, 0x21 };
     File.WriteAllBytes(Path.Combine(modelDir, "demo.vmdl_c"), original);
     var vpkPath = Path.Combine(root, "pak01_dir.vpk");

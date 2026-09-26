@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.Diagnostics;
 using System.IO;
 using System.Linq;
+using System.Security.Cryptography;
 using System.Threading.Tasks;
 using Avalonia.Controls;
 using Avalonia.Interactivity;
@@ -23,6 +24,11 @@ public partial class MainWindow : Window
     private bool _isUpdatingSelection = false;
     private int _logLineCount = 0;
     private readonly System.Text.StringBuilder _logBuffer = new();
+    private sealed record ProtectedModelState(
+        CompiledModelProtection Guard, string? Skel, string? Graph, string? UiGraph);
+
+    private readonly Dictionary<string, ProtectedModelState> _protectedModels =
+        new(StringComparer.OrdinalIgnoreCase);
 
     private static readonly IBrush BrushOk = new SolidColorBrush(Color.FromRgb(0xDF, 0xE2, 0xE6));
     private static readonly IBrush BrushWarn = new SolidColorBrush(Color.FromRgb(0xBA, 0xBE, 0xC4));
@@ -33,6 +39,100 @@ public partial class MainWindow : Window
     {
         InitializeComponent();
         Loaded += MainWindow_Loaded;
+        Closed += (_, _) => ReleaseAllModelProtections();
+    }
+
+    private void UpdateProtectionStatus()
+    {
+        TxtMakeVpkBtn.Text = _protectedModels.Count == 0
+            ? "make vpk..."
+            : $"make vpk... ({_protectedModels.Count} protected)";
+    }
+
+    private void ReleaseProtectionForOutput(string deployedPath)
+    {
+        foreach (var sourcePath in _protectedModels
+                     .Where(pair => string.Equals(pair.Value.Guard.ModelPath, deployedPath, StringComparison.OrdinalIgnoreCase))
+                     .Select(pair => pair.Key).ToList())
+        {
+            _protectedModels[sourcePath].Guard.Dispose();
+            _protectedModels.Remove(sourcePath);
+            Log($"[protect] released: {Path.GetFileName(deployedPath)}");
+        }
+        UpdateProtectionStatus();
+    }
+
+    private void ReleaseProtectionForSource(string sourcePath)
+    {
+        if (_protectedModels.Remove(sourcePath, out var protection))
+        {
+            protection.Guard.Dispose();
+            Log($"[protect] released: {Path.GetFileName(protection.Guard.ModelPath)}");
+            UpdateProtectionStatus();
+        }
+    }
+
+    private void ReleaseProtectionsForAddon(string gameAddonDir)
+    {
+        var fullAddonDir = Path.GetFullPath(gameAddonDir);
+        foreach (var pair in _protectedModels.ToList())
+        {
+            if (IsModelInAddon(pair.Value.Guard.ModelPath, fullAddonDir))
+                ReleaseProtectionForSource(pair.Key);
+        }
+    }
+
+    private void ReleaseAllModelProtections()
+    {
+        foreach (var protection in _protectedModels.Values)
+            protection.Guard.Dispose();
+        _protectedModels.Clear();
+    }
+
+    private async Task OfferProtectionReleaseAfterFailedPackAsync(string targetPath, string? citadelDir)
+    {
+        var (_, addonName, _) = VmdlPipeline.ParseCsdkPath(targetPath, citadelDir);
+        var gameAddonDir = VmdlPipeline.ResolveGameAddonDir(targetPath, citadelDir, addonName);
+        if (!_protectedModels.Values.Any(protection =>
+                IsModelInAddon(protection.Guard.ModelPath, gameAddonDir)))
+            return;
+
+        var keepProtected = await DialogService.ShowConfirmAsync(this,
+            "VPK was not created",
+            "Keep the compiled model protected while you retry packaging?\n\nChoose No to release the protection.");
+        if (!keepProtected)
+            ReleaseProtectionsForAddon(gameAddonDir);
+    }
+
+    private static bool IsModelInAddon(string modelPath, string gameAddonDir)
+    {
+        var relative = Path.GetRelativePath(Path.GetFullPath(gameAddonDir), modelPath);
+        return !Path.IsPathRooted(relative) && relative != ".." &&
+               !relative.StartsWith(".." + Path.DirectorySeparatorChar, StringComparison.Ordinal);
+    }
+
+    private string? VerifyModelsInVpk(string vpkPath, string gameAddonDir, string selectedCompiledPath)
+    {
+        var modelPaths = _protectedModels.Values
+            .Select(state => state.Guard.ModelPath)
+            .Where(path => IsModelInAddon(path, gameAddonDir))
+            .Append(selectedCompiledPath)
+            .Distinct(StringComparer.OrdinalIgnoreCase);
+
+        foreach (var modelPath in modelPaths)
+        {
+            var relativePath = Path.GetRelativePath(gameAddonDir, modelPath).Replace('\\', '/');
+            var packedBytes = VpkHeroScanner.ExtractFileFromVpk(vpkPath, relativePath);
+            if (packedBytes is null)
+                return $"The VPK does not contain the compiled model: {relativePath}";
+
+            using var deployed = File.OpenRead(modelPath);
+            if (packedBytes.LongLength != deployed.Length ||
+                !SHA256.HashData(packedBytes).AsSpan().SequenceEqual(SHA256.HashData(deployed)))
+                return $"The VPK contains a different version of the compiled model: {relativePath}";
+        }
+
+        return null;
     }
 
     private async void MainWindow_Loaded(object? sender, RoutedEventArgs e)
@@ -764,10 +864,13 @@ public partial class MainWindow : Window
         }
     }
 
-    private async Task<bool> MakeVpkAsync(bool suppressSuccessDialog = false)
+    private async Task<bool> MakeVpkAsync(
+        bool suppressSuccessDialog = false,
+        string? targetPathOverride = null,
+        string? citadelDirOverride = null)
     {
-        var targetPath = GetResolvedTargetPath();
-        var citadelDir = TxtCitadelPath.Text?.Trim();
+        var targetPath = targetPathOverride ?? GetResolvedTargetPath();
+        var citadelDir = citadelDirOverride ?? TxtCitadelPath.Text?.Trim();
 
         if (string.IsNullOrEmpty(targetPath) || string.IsNullOrEmpty(citadelDir))
         {
@@ -794,11 +897,19 @@ public partial class MainWindow : Window
                 return false;
             }
 
+            _protectedModels.TryGetValue(targetPath, out var protectedState);
+            var expectedSkel = protectedState is null
+                ? (ChkSkel.IsChecked == true ? TxtSkel.Text?.Trim() ?? string.Empty : null)
+                : protectedState.Skel;
+            var expectedGraph = protectedState is null
+                ? (ChkGraph.IsChecked == true ? TxtGraph.Text?.Trim() ?? string.Empty : null)
+                : protectedState.Graph;
+            var expectedUiGraph = protectedState is null
+                ? (ChkUiGraph.IsChecked == true ? TxtUiGraph.Text?.Trim() ?? string.Empty : null)
+                : protectedState.UiGraph;
             var verificationError = VmdlPipeline.VerifyCompiledAg2References(
                 compiledPath,
-                ChkSkel.IsChecked == true ? TxtSkel.Text?.Trim() ?? string.Empty : null,
-                ChkGraph.IsChecked == true ? TxtGraph.Text?.Trim() ?? string.Empty : null,
-                ChkUiGraph.IsChecked == true ? TxtUiGraph.Text?.Trim() ?? string.Empty : null);
+                expectedSkel, expectedGraph, expectedUiGraph);
             if (verificationError != null)
             {
                 await DialogService.ShowErrorAsync(this, "compiled model missing AG2 references", verificationError);
@@ -822,6 +933,7 @@ public partial class MainWindow : Window
             if (saveFile == null)
             {
                 Log("[make vpk] packaging cancelled by user.");
+                ReleaseProtectionsForAddon(gameAddonDir);
                 return false;
             }
 
@@ -830,6 +942,15 @@ public partial class MainWindow : Window
             var res = await VpkBuilder.PackAddonToVpkAsync(gameAddonDir, outputVpk);
             if (res.Success)
             {
+                var packedModelError = VerifyModelsInVpk(outputVpk, gameAddonDir, compiledPath);
+                if (packedModelError != null)
+                {
+                    Log($"[make vpk error] {packedModelError}");
+                    await DialogService.ShowErrorAsync(this, "VPK verification failed", packedModelError);
+                    return false;
+                }
+
+                ReleaseProtectionsForAddon(gameAddonDir);
                 Log($"[make vpk] addon packaged successfully: {res.OutputVpkPath} ({res.FileCount} files, {res.TotalBytes / 1024 / 1024:N1} mb)");
                 if (!suppressSuccessDialog)
                 {
@@ -854,7 +975,19 @@ public partial class MainWindow : Window
 
     private async void BtnMakeVpk_Click(object? sender, RoutedEventArgs e)
     {
-        await MakeVpkAsync(suppressSuccessDialog: false);
+        if (_isProcessing) return;
+        var targetPath = GetResolvedTargetPath();
+        try
+        {
+            _isProcessing = true;
+            var packed = await MakeVpkAsync(suppressSuccessDialog: false);
+            if (!packed && !string.IsNullOrWhiteSpace(targetPath))
+                await OfferProtectionReleaseAfterFailedPackAsync(targetPath, TxtCitadelPath.Text?.Trim());
+        }
+        finally
+        {
+            _isProcessing = false;
+        }
     }
 
     private async void BtnExportCsWin_Click(object? sender, RoutedEventArgs e)
@@ -930,6 +1063,17 @@ public partial class MainWindow : Window
             return;
         }
 
+        var requestedSkel = TxtSkel.Text?.Trim();
+        var requestedGraph = TxtGraph.Text?.Trim();
+        var requestedUiGraph = TxtUiGraph.Text?.Trim();
+        var addSkel = ChkSkel.IsChecked == true;
+        var addGraph = ChkGraph.IsChecked == true;
+        var addUiGraph = ChkUiGraph.IsChecked == true;
+        var (defaultSkel, defaultGraph, defaultUiGraph) = VmdlPipeline.DeriveDefaultPaths(targetPath);
+        var expectedSkel = addSkel ? (string.IsNullOrWhiteSpace(requestedSkel) ? defaultSkel : requestedSkel) : null;
+        var expectedGraph = addGraph ? (string.IsNullOrWhiteSpace(requestedGraph) ? defaultGraph : requestedGraph) : null;
+        var expectedUiGraph = addUiGraph ? (string.IsNullOrWhiteSpace(requestedUiGraph) ? defaultUiGraph : requestedUiGraph) : null;
+
         try
         {
             _isProcessing = true;
@@ -958,13 +1102,13 @@ public partial class MainWindow : Window
 
             var (success, msg) = await VmdlPipeline.ProcessVmdlFileAsync(
                 targetPath,
-                skelPath: TxtSkel.Text?.Trim(),
-                graphPath: TxtGraph.Text?.Trim(),
-                uiGraphPath: TxtUiGraph.Text?.Trim(),
+                skelPath: requestedSkel,
+                graphPath: requestedGraph,
+                uiGraphPath: requestedUiGraph,
                 createBackup: true,
-                addSkel: ChkSkel.IsChecked == true,
-                addGraph: ChkGraph.IsChecked == true,
-                addUiGraph: ChkUiGraph.IsChecked == true,
+                addSkel: addSkel,
+                addGraph: addGraph,
+                addUiGraph: addUiGraph,
                 upgradeHeader: true,
                 compileCsWin: true,
                 revertVmdl: ChkRevert.IsChecked == true,
@@ -972,7 +1116,16 @@ public partial class MainWindow : Window
                 citadelAddonsDir: citadelDir,
                 disableAnimationList: ChkDisableAnimList.IsChecked == true,
                 progress: progress,
-                onLog: Log
+                onLog: Log,
+                beforeDeploy: ReleaseProtectionForOutput,
+                afterDeploy: (deployedPath, compilerOutputPath) =>
+                {
+                    var protection = CompiledModelProtection.Acquire(deployedPath, compilerOutputPath);
+                    _protectedModels[targetPath] = new ProtectedModelState(
+                        protection, expectedSkel, expectedGraph, expectedUiGraph);
+                    UpdateProtectionStatus();
+                    Log($"[protect] CSDK12 cannot overwrite {Path.GetFileName(deployedPath)} until packaging or refusal.");
+                }
             );
 
             if (success)
@@ -992,7 +1145,16 @@ public partial class MainWindow : Window
 
                 if (packVpk)
                 {
-                    await MakeVpkAsync(suppressSuccessDialog: false);
+                    var packed = await MakeVpkAsync(
+                        suppressSuccessDialog: false,
+                        targetPathOverride: targetPath,
+                        citadelDirOverride: citadelDir);
+                    if (!packed)
+                        await OfferProtectionReleaseAfterFailedPackAsync(targetPath, citadelDir);
+                }
+                else
+                {
+                    ReleaseProtectionForSource(targetPath);
                 }
             }
             else

@@ -30,6 +30,7 @@ Deadlock uses AnimGraph 2 (AG2) animation structures. Standard CSDK12 tooling ca
 
 ### Pipeline Actions
 - **compile**: Runs the full automated compilation pipeline (injects AG2 references, compiles via CSWin64 ModelDoc, verifies the AG2 references in the compiled .vmdl_c before deployment, copies it to the addon game directory, and leaves the CSDK .vmdl unchanged when revert is enabled (otherwise it saves the injected version).
+- **compile-to-VPK protection**: After a successful CSWin64 compile, the app holds a Windows read-only handle on the deployed `.vmdl_c` so CSDK12 cannot overwrite it while the user decides whether to create a VPK. VPK creation can still read the file. After packaging, the app reopens the archive and compares the length and SHA-256 of the selected model and all protected models against their Game addon files; protection is released only after this verification succeeds. If packaging fails, the user can keep the files locked and retry, decline packaging, or close the app to release the handles.
 - **fix(modeldoc)**: Removes all AG2 nodes from decompiled .vmdl to prevent crash.
 - **get ag2 lists**: Scans Deadlock's pak01_dir.vpk to extract up-to-date .vnmskel and .vnmgraph references for all heroes.
 - **restore ag2 list**: Resets and reloads the default built-in hero preset database.
