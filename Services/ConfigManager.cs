@@ -11,8 +11,8 @@ public static class ConfigManager
 
     public static string GetConfigPath()
     {
-        var exeDir = AppDomain.CurrentDomain.BaseDirectory;
-        return Path.Combine(exeDir, "config.json");
+        var userDir = Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData);
+        return Path.Combine(userDir, "DeadlockVmdlCompiler", "config.json");
     }
 
     public static bool IsTemporaryPath(string? path)
@@ -39,10 +39,15 @@ public static class ConfigManager
     public static AppConfig LoadConfig()
     {
         var config = new AppConfig();
-        var path = GetConfigPath();
-
-        if (File.Exists(path))
+        var candidates = new[]
         {
+            GetConfigPath(),
+            Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "config.json")
+        };
+
+        foreach (var path in candidates)
+        {
+            if (!File.Exists(path)) continue;
             try
             {
                 var json = File.ReadAllText(path);
@@ -50,11 +55,12 @@ public static class ConfigManager
                 if (loaded != null)
                 {
                     config = loaded;
+                    break;
                 }
             }
             catch
             {
-                // Fallback to default
+                // Try the legacy location if the user config is unreadable.
             }
         }
 
@@ -88,6 +94,7 @@ public static class ConfigManager
                 config.LastTargetPath = string.Empty;
 
             var path = GetConfigPath();
+            Directory.CreateDirectory(Path.GetDirectoryName(path)!);
             var json = JsonSerializer.Serialize(config, JsonOptions);
             File.WriteAllText(path, json);
             return true;

@@ -6,6 +6,7 @@ using System.Linq;
 using System.Text.RegularExpressions;
 using System.Threading.Tasks;
 using DeadlockVmdlCompiler.Models;
+using ValveResourceFormat;
 
 namespace DeadlockVmdlCompiler.Services;
 
@@ -53,6 +54,12 @@ public static class VmdlPipeline
             var folder = parts[i];
             if (db.ContainsKey(folder))
                 return folder;
+            var versionedMatch = db.Keys
+                .Where(key => folder.StartsWith(key + "_", StringComparison.OrdinalIgnoreCase))
+                .OrderByDescending(key => key.Length)
+                .FirstOrDefault();
+            if (versionedMatch != null)
+                return versionedMatch;
         }
 
         // Check filename stem
@@ -151,14 +158,8 @@ public static class VmdlPipeline
             return (preset.Skel, preset.Graph, preset.UiGraph);
         }
 
-        var clean = vmdlPath.Replace('\\', '/');
-        var stem = Path.GetFileNameWithoutExtension(clean).ToLowerInvariant();
-
-        var skel = Regex.Replace(clean, @"\.vmdl$", ".vnmskel", RegexOptions.IgnoreCase);
-        var graph = $"animgraphs/animgraph2/hero/hero.vnmgraph+{stem}.vnmgraph";
-        var uiGraph = $"animgraphs/animgraph2/hero/hero_ui.vnmgraph+{stem}.vnmgraph";
-
-        return (skel, graph, uiGraph);
+        // There is no reliable way to infer compiled Deadlock references from a custom VMDL path.
+        return (string.Empty, string.Empty, string.Empty);
     }
 
     public static (string UpgradedContent, List<string> Changes) UpgradeVmdlContent(
@@ -170,82 +171,8 @@ public static class VmdlPipeline
         bool addGraph = true,
         bool addUiGraph = true,
         bool upgradeHeader = true)
-    {
-        var lines = content.Split(new[] { "\r\n", "\r", "\n" }, StringSplitOptions.None).ToList();
-        var changes = new List<string>();
-
-        if (upgradeHeader && lines.Count > 0)
-        {
-            if (lines[0].Contains("format:modeldoc40") || lines[0].Contains("modeldoc"))
-            {
-                if (lines[0].Trim() != ModelDoc41Header)
-                {
-                    lines[0] = ModelDoc41Header;
-                    changes.Add("Upgraded header format to modeldoc41");
-                }
-            }
-        }
-
-        var fullText = string.Join("\n", lines);
-        var hasNmSkel = fullText.Contains("NmSkeletonList");
-        var hasAnimGraph = fullText.Contains("AnimGraph2List") || fullText.Contains("DefaultAnimGraph2");
-
-        var nodesToInject = new List<(string Name, string Text)>();
-
-        if (addSkel && !hasNmSkel)
-        {
-            var skelBlock = $"\t\t\t{{\n\t\t\t\t_class = \"NmSkeletonList\"\n\t\t\t\tchildren = \n\t\t\t\t[\n\t\t\t\t\t{{\n\t\t\t\t\t\t_class = \"NmSkeletonReference\"\n\t\t\t\t\t\tfilename = \"{skelPath}\"\n\t\t\t\t\t}},\n\t\t\t\t]\n\t\t\t}},\n";
-            nodesToInject.Add(("NmSkeletonList", skelBlock));
-        }
-
-        if (addGraph && !hasAnimGraph)
-        {
-            var animChildren = $"\t\t\t\t\t{{\n\t\t\t\t\t\t_class = \"DefaultAnimGraph2\"\n\t\t\t\t\t\tfilename = \"{graphPath}\"\n\t\t\t\t\t}},\n";
-            if (addUiGraph && !string.IsNullOrEmpty(uiGraphPath))
-            {
-                animChildren += $"\t\t\t\t\t{{\n\t\t\t\t\t\t_class = \"AnimGraph2\"\n\t\t\t\t\t\tname = \"ui\"\n\t\t\t\t\t\tfilename = \"{uiGraphPath}\"\n\t\t\t\t\t}},\n";
-            }
-            var graphBlock = $"\t\t\t{{\n\t\t\t\t_class = \"AnimGraph2List\"\n\t\t\t\tchildren = \n\t\t\t\t[\n{animChildren}\t\t\t\t]\n\t\t\t}},\n";
-            nodesToInject.Add(("AnimGraph2List", graphBlock));
-        }
-
-        if (nodesToInject.Count == 0)
-        {
-            return (string.Join("\n", lines), changes);
-        }
-
-        int insertIdx = -1;
-        for (int i = 0; i < lines.Count; i++)
-        {
-            if (lines[i].Contains("model_archetype") || lines[i].Contains("primary_associated_entity"))
-            {
-                if (i > 0 && lines[i - 1].Trim() == "]")
-                {
-                    insertIdx = i - 1;
-                }
-                else
-                {
-                    insertIdx = i;
-                }
-                break;
-            }
-        }
-
-        if (insertIdx != -1)
-        {
-            foreach (var (name, text) in nodesToInject)
-            {
-                lines.Insert(insertIdx++, text.TrimEnd('\r', '\n'));
-                changes.Add($"Injected {name} node");
-            }
-        }
-        else
-        {
-            changes.Add("Error: Could not locate rootNode children closing bracket");
-        }
-
-        return (string.Join("\n", lines), changes);
-    }
+        => ModelDocAg2Editor.Upgrade(content, skelPath, graphPath, uiGraphPath,
+            addSkel, addGraph, addUiGraph, upgradeHeader, ModelDoc41Header);
 
     public record CompileProgress(
         int Step,
@@ -314,7 +241,10 @@ public static class VmdlPipeline
         string? citadelAddonsDir = null,
         bool disableAnimationList = true,
         IProgress<CompileProgress>? progress = null,
-        Action<string>? onLog = null)
+        Action<string>? onLog = null,
+        string? expectedSkelPath = null,
+        string? expectedGraphPath = null,
+        string? expectedUiGraphPath = null)
     {
         var cfg = ConfigManager.LoadConfig();
         var useCsWinDir = !string.IsNullOrWhiteSpace(cswinDir) ? cswinDir : (!string.IsNullOrWhiteSpace(cfg.CsWinDir) ? cfg.CsWinDir : DefaultCsWinDir);
@@ -340,6 +270,7 @@ public static class VmdlPipeline
 
         var csWinVmdlPath = Path.Combine(useCsWinDir, "content", "csgo_addons", addonName, subpath);
         var csWinVmdlDir = Path.GetDirectoryName(csWinVmdlPath)!;
+        var csWinCompiledVmdlc = Path.Combine(useCsWinDir, "game", "csgo_addons", addonName, subpath + "_c");
         var csdkVmdlDir = Path.GetDirectoryName(csdk12VmdlPath);
         Directory.CreateDirectory(csWinVmdlDir);
 
@@ -391,6 +322,10 @@ public static class VmdlPipeline
 
         await File.WriteAllTextAsync(csWinVmdlPath, csWinContent);
         onLog?.Invoke("[prepare] wrote temporary modeldoc definition to cswin64 addon");
+
+        // A successful compiler exit must not be mistaken for an old output from a previous run.
+        if (File.Exists(csWinCompiledVmdlc))
+            File.Delete(csWinCompiledVmdlc);
 
         var psi = new ProcessStartInfo
         {
@@ -451,11 +386,15 @@ public static class VmdlPipeline
             return (false, $"CSWin64 Compiler error (code {proc.ExitCode}): {msg.Trim()}");
         }
 
-        var csWinCompiledVmdlc = Path.Combine(useCsWinDir, "game", "csgo_addons", addonName, subpath + "_c");
         if (!File.Exists(csWinCompiledVmdlc))
         {
             return (false, $"Compiler finished but .vmdl_c was not created at: {csWinCompiledVmdlc}");
         }
+
+        var verificationError = VerifyCompiledAg2References(csWinCompiledVmdlc,
+            expectedSkelPath, expectedGraphPath, expectedUiGraphPath);
+        if (verificationError != null)
+            return (false, verificationError);
 
         progress?.Report(new CompileProgress(5, 5, 90, "[5/5] deploying model", Path.GetFileName(csWinCompiledVmdlc)));
 
@@ -487,6 +426,70 @@ public static class VmdlPipeline
         onLog?.Invoke($"[deploy] deployed .vmdl_c ({vmdlcSize / 1024:N0} KB) to: {csdk12GameVmdlc}");
 
         return (true, $"Compiled via CSWin64 & deployed .vmdl_c to: {csdk12GameVmdlc}");
+    }
+
+    public static string? VerifyCompiledAg2References(
+        string compiledPath, string? expectedSkelPath, string? expectedGraphPath, string? expectedUiGraphPath)
+    {
+        if (expectedSkelPath == null && expectedGraphPath == null && expectedUiGraphPath == null)
+            return null;
+        if ((expectedSkelPath != null && string.IsNullOrWhiteSpace(expectedSkelPath)) ||
+            (expectedGraphPath != null && string.IsNullOrWhiteSpace(expectedGraphPath)) ||
+            (expectedUiGraphPath != null && string.IsNullOrWhiteSpace(expectedUiGraphPath)))
+            return "Cannot verify AG2 references because a selected hero preset path is empty.";
+
+        try
+        {
+            using var resource = new Resource();
+            resource.Read(compiledPath);
+            var data = (resource.DataBlock?.ToString() ?? string.Empty)
+                .Replace('\\', '/')
+                .Replace("\\u002B", "+", StringComparison.OrdinalIgnoreCase);
+            var missing = new List<string>();
+
+            if (expectedSkelPath != null &&
+                (!data.Contains("m_vecNmSkeletonRefs", StringComparison.OrdinalIgnoreCase) ||
+                 !data.Contains(expectedSkelPath.Replace('\\', '/'), StringComparison.OrdinalIgnoreCase)))
+                missing.Add($"NmSkeletonReference ({expectedSkelPath})");
+
+            if (expectedGraphPath != null &&
+                (!data.Contains("m_animGraph2Refs", StringComparison.OrdinalIgnoreCase) ||
+                 !data.Contains(expectedGraphPath.Replace('\\', '/'), StringComparison.OrdinalIgnoreCase)))
+                missing.Add($"DefaultAnimGraph2 ({expectedGraphPath})");
+
+            if (expectedUiGraphPath != null)
+            {
+                var uiFound = Regex.Matches(data, @"\{[\s\S]*?\}")
+                    .Any(item => Regex.IsMatch(item.Value, @"\bm_sIdentifier\s*=\s*""ui""", RegexOptions.IgnoreCase) &&
+                                 item.Value.Contains(expectedUiGraphPath.Replace('\\', '/'), StringComparison.OrdinalIgnoreCase));
+                if (!uiFound) missing.Add($"ui AnimGraph2 ({expectedUiGraphPath})");
+            }
+
+            return missing.Count == 0 ? null :
+                $"Compiled model is missing AG2 references: {string.Join(", ", missing)}. The model was not deployed.";
+        }
+        catch (Exception ex)
+        {
+            return $"Could not verify AG2 references in compiled model: {ex.Message}. The model was not deployed.";
+        }
+    }
+
+    private static string CreateUniqueBackup(string sourcePath)
+    {
+        var basePath = sourcePath + ".bak";
+        for (var number = 0; ; number++)
+        {
+            var destination = number == 0 ? basePath : basePath + "." + number;
+            try
+            {
+                File.Copy(sourcePath, destination, overwrite: false);
+                return destination;
+            }
+            catch (IOException) when (File.Exists(destination))
+            {
+                // Preserve every previous backup, including the original pre-sanitize source.
+            }
+        }
     }
 
     public static async Task<(bool Success, string Message)> ProcessVmdlFileAsync(
@@ -531,6 +534,10 @@ public static class VmdlPipeline
             upgradeHeader: upgradeHeader
         );
 
+        var upgradeError = changes.FirstOrDefault(change => change.StartsWith("Error:", StringComparison.Ordinal));
+        if (upgradeError != null)
+            return (false, upgradeError);
+
         if (changes.Count > 0)
         {
             onLog?.Invoke($"[ag2] upgraded syntax: {string.Join(", ", changes)}");
@@ -538,8 +545,7 @@ public static class VmdlPipeline
 
         if (createBackup)
         {
-            var bakFile = filepath + ".bak";
-            File.Copy(filepath, bakFile, overwrite: true);
+            var bakFile = CreateUniqueBackup(filepath);
             onLog?.Invoke($"[backup] created backup: {Path.GetFileName(bakFile)}");
         }
 
@@ -554,7 +560,10 @@ public static class VmdlPipeline
                 citadelAddonsDir: citadelAddonsDir,
                 disableAnimationList: disableAnimationList,
                 progress: progress,
-                onLog: onLog
+                onLog: onLog,
+                expectedSkelPath: addSkel ? useSkel : null,
+                expectedGraphPath: addGraph ? useGraph : null,
+                expectedUiGraphPath: addUiGraph ? useUiGraph : null
             );
 
             if (!compSuccess)
@@ -563,13 +572,12 @@ public static class VmdlPipeline
             stepLogs.Add(compMsg);
         }
 
-        progress?.Report(new CompileProgress(5, 5, 95, "[5/5] finalizing", revertVmdl ? "reverting vmdl" : "saving vmdl"));
+        progress?.Report(new CompileProgress(5, 5, 95, "[5/5] finalizing", revertVmdl ? "leaving source unchanged" : "saving vmdl"));
 
         if (revertVmdl)
         {
-            await File.WriteAllTextAsync(filepath, origContent);
-            stepLogs.Add("Reverted CSDK12 VMDL to pre-upgrade format (ModelDoc compatible)");
-            onLog?.Invoke("[revert] reverted working .vmdl file back to original clean format");
+            stepLogs.Add("Left CSDK12 VMDL unchanged (ModelDoc compatible)");
+            onLog?.Invoke("[revert] working .vmdl was not modified");
         }
         else
         {
@@ -603,8 +611,8 @@ public static class VmdlPipeline
         var useCsWinDir = !string.IsNullOrWhiteSpace(cswinDir) ? cswinDir : (!string.IsNullOrWhiteSpace(cfg.CsWinDir) ? cfg.CsWinDir : DefaultCsWinDir);
         var useCitadelDir = !string.IsNullOrWhiteSpace(citadelAddonsDir) ? citadelAddonsDir : cfg.CitadelAddonsDir;
 
-        if (!Directory.Exists(useCsWinDir))
-            return (false, $"CSWin64 directory does not exist: {useCsWinDir}", 0);
+        if (!IsValidCsWinDir(useCsWinDir))
+            return (false, $"CSWin64 resourcecompiler.exe was not found in: {useCsWinDir}", 0);
 
         var (container, addonName, subpath) = ParseCsdkPath(filepath, useCitadelDir);
 
@@ -625,6 +633,10 @@ public static class VmdlPipeline
             addUiGraph: addUiGraph,
             upgradeHeader: true
         );
+
+        var upgradeError = changes.FirstOrDefault(change => change.StartsWith("Error:", StringComparison.Ordinal));
+        if (upgradeError != null)
+            return (false, upgradeError, 0);
 
         int filesCopied = 0;
         var srcModelDir = Path.GetDirectoryName(filepath) ?? string.Empty;
@@ -842,8 +854,7 @@ public static class VmdlPipeline
 
         if (createBackup)
         {
-            var bak = vmdlPath + ".bak";
-            File.Copy(vmdlPath, bak, overwrite: true);
+            CreateUniqueBackup(vmdlPath);
         }
 
         var changes = new List<string>();

@@ -11,6 +11,10 @@ public static class HeroDatabase
 {
     private static Dictionary<string, HeroPreset>? _database;
 
+    private static string GetUserDatabasePath() => Path.Combine(
+        Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
+        "DeadlockVmdlCompiler", "hero_paths.json");
+
     public static Dictionary<string, HeroPreset> GetDatabase()
     {
         if (_database != null)
@@ -25,6 +29,7 @@ public static class HeroDatabase
         var exeDir = AppDomain.CurrentDomain.BaseDirectory;
         var candidates = new[]
         {
+            GetUserDatabasePath(),
             Path.Combine(exeDir, "hero_paths.json"),
             Path.Combine(exeDir, "tools", "hero_paths.json"),
             Path.Combine(Directory.GetCurrentDirectory(), "hero_paths.json")
@@ -78,23 +83,9 @@ public static class HeroDatabase
     public static string SaveDatabase(Dictionary<string, HeroPreset> data)
     {
         var json = JsonSerializer.Serialize(data, new JsonSerializerOptions { WriteIndented = true });
-        var targetFile = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "hero_paths.json");
-
-        try
-        {
-            File.WriteAllText(targetFile, json);
-        }
-        catch { }
-
-        try
-        {
-            var curDirFile = Path.Combine(Directory.GetCurrentDirectory(), "hero_paths.json");
-            if (!string.Equals(targetFile, curDirFile, StringComparison.OrdinalIgnoreCase))
-            {
-                File.WriteAllText(curDirFile, json);
-            }
-        }
-        catch { }
+        var targetFile = GetUserDatabasePath();
+        Directory.CreateDirectory(Path.GetDirectoryName(targetFile)!);
+        File.WriteAllText(targetFile, json);
 
         _database = new Dictionary<string, HeroPreset>(data, StringComparer.OrdinalIgnoreCase);
         return targetFile;

@@ -1,5 +1,4 @@
 ﻿using System;
-using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
@@ -17,8 +16,6 @@ namespace DeadlockVmdlCompiler.Services;
 
 public static class DmxModelLoader
 {
-    private static readonly ConcurrentDictionary<string, SimpleMesh3D> _modelCache = new(StringComparer.OrdinalIgnoreCase);
-
     public static Action<string>? DebugLogger { get; set; }
 
     private static void LogDebug(string msg)
@@ -35,21 +32,7 @@ public static class DmxModelLoader
         }
 
         var fullPath = Path.GetFullPath(vmdlPath);
-        if (_modelCache.TryGetValue(fullPath, out var cached) && cached != null && cached.Vertices.Count > 0)
-        {
-            LogDebug("[3D Loader] Model loaded from cache: " + cached.MeshName + " (" + cached.Vertices.Count + " verts)");
-            return cached;
-        }
-
-        return await Task.Run(() =>
-        {
-            var res = LoadModelFromVmdlInternal(fullPath, citadelDir);
-            if (res != null && res.Vertices.Count > 0)
-            {
-                _modelCache[fullPath] = res;
-            }
-            return res;
-        });
+        return await Task.Run(() => LoadModelFromVmdlInternal(fullPath, citadelDir));
     }
 
     private static SimpleMesh3D? LoadModelFromVmdlInternal(string vmdlPath, string? citadelDir)

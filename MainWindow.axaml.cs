@@ -390,22 +390,30 @@ public partial class MainWindow : Window
         try
         {
             var heroName = VmdlPipeline.DetectHeroFromPath(vmdlPath);
-            if (string.IsNullOrEmpty(heroName)) return;
-
             var db = HeroDatabase.GetDatabase();
-            if (db.TryGetValue(heroName, out var preset))
+            if (string.IsNullOrEmpty(heroName) || !db.TryGetValue(heroName, out var preset))
             {
-                TxtSkel.Text = preset.Skel ?? string.Empty;
-                TxtGraph.Text = preset.Graph ?? string.Empty;
-                TxtUiGraph.Text = preset.UiGraph ?? string.Empty;
-
                 if (CmbHeroPreset.ItemsSource is List<string> presets)
                 {
-                    var match = presets.FirstOrDefault(p => p.Equals(heroName, StringComparison.OrdinalIgnoreCase));
-                    if (match != null)
-                    {
-                        CmbHeroPreset.SelectedItem = match;
-                    }
+                    CmbHeroPreset.SelectedIndex = 0;
+                }
+
+                TxtSkel.Text = string.Empty;
+                TxtGraph.Text = string.Empty;
+                TxtUiGraph.Text = string.Empty;
+                return;
+            }
+
+            TxtSkel.Text = preset.Skel ?? string.Empty;
+            TxtGraph.Text = preset.Graph ?? string.Empty;
+            TxtUiGraph.Text = preset.UiGraph ?? string.Empty;
+
+            if (CmbHeroPreset.ItemsSource is List<string> heroPresets)
+            {
+                var match = heroPresets.FirstOrDefault(p => p.Equals(heroName, StringComparison.OrdinalIgnoreCase));
+                if (match != null)
+                {
+                    CmbHeroPreset.SelectedItem = match;
                 }
             }
         }
@@ -416,16 +424,19 @@ public partial class MainWindow : Window
     {
         if (_isInitializing) return;
 
-        _config.CsWinDir = TxtCsWinPath.Text?.Trim();
-        _config.CitadelAddonsDir = TxtCitadelPath.Text?.Trim();
-        _config.LastTargetPath = GetResolvedTargetPath();
+        _config.CsWinDir = TxtCsWinPath.Text?.Trim() ?? string.Empty;
+        _config.CitadelAddonsDir = TxtCitadelPath.Text?.Trim() ?? string.Empty;
+        _config.LastTargetPath = GetResolvedTargetPath() ?? string.Empty;
         _config.ChkRevert = ChkRevert.IsChecked == true;
         _config.ChkSkel = ChkSkel.IsChecked == true;
         _config.ChkGraph = ChkGraph.IsChecked == true;
         _config.ChkUiGraph = ChkUiGraph.IsChecked == true;
         _config.ChkDisableAnimList = ChkDisableAnimList.IsChecked == true;
 
-        ConfigManager.SaveConfig(_config);
+        if (!ConfigManager.SaveConfig(_config))
+        {
+            Log("[config error] configuration could not be saved.");
+        }
     }
 
     // -----------------------------------------------------------------
@@ -657,6 +668,13 @@ public partial class MainWindow : Window
                 }
             }
 
+            if (string.IsNullOrWhiteSpace(vpkPath))
+            {
+                Log("[vpk scan cancelled] no VPK was selected.");
+                await DialogService.ShowErrorAsync(this, "VPK required", "Select Deadlock's pak01_dir.vpk to scan hero presets.");
+                return;
+            }
+
             Log($"scanning vpk: {vpkPath}...");
             
             PanelScanProgress.IsVisible = true;
@@ -763,27 +781,38 @@ public partial class MainWindow : Window
             var (container, addonName, subpath) = VmdlPipeline.ParseCsdkPath(targetPath, citadelDir);
             var gameAddonDir = VmdlPipeline.ResolveGameAddonDir(targetPath, citadelDir, addonName);
 
-            // If game directory does not exist, fallback to content addon directory
             if (!Directory.Exists(gameAddonDir))
             {
-                var contentAddonDir = Path.Combine(citadelDir, addonName);
-                if (Directory.Exists(contentAddonDir))
-                {
-                    gameAddonDir = contentAddonDir;
-                }
-                else
-                {
-                    await DialogService.ShowErrorAsync(this, "vpk packaging failed", $"source directory does not exist:\n{gameAddonDir}");
-                    return false;
-                }
+                await DialogService.ShowErrorAsync(this, "compiled addon missing", $"compiled game addon directory does not exist:\n{gameAddonDir}\n\nCompile the addon before creating its VPK.");
+                return false;
+            }
+
+            var compiledPath = Path.Combine(gameAddonDir, subpath + "_c");
+            if (!File.Exists(compiledPath))
+            {
+                await DialogService.ShowErrorAsync(this, "compiled model missing", $"compiled model does not exist:\n{compiledPath}\n\nCompile the selected model before creating its VPK.");
+                return false;
+            }
+
+            var verificationError = VmdlPipeline.VerifyCompiledAg2References(
+                compiledPath,
+                ChkSkel.IsChecked == true ? TxtSkel.Text?.Trim() ?? string.Empty : null,
+                ChkGraph.IsChecked == true ? TxtGraph.Text?.Trim() ?? string.Empty : null,
+                ChkUiGraph.IsChecked == true ? TxtUiGraph.Text?.Trim() ?? string.Empty : null);
+            if (verificationError != null)
+            {
+                await DialogService.ShowErrorAsync(this, "compiled model missing AG2 references", verificationError);
+                return false;
             }
 
             // Let user choose destination path & filename
+            var suggestedStartLocation = await StorageProvider.TryGetFolderFromPathAsync(gameAddonDir);
             var saveFile = await StorageProvider.SaveFilePickerAsync(new FilePickerSaveOptions
             {
                 Title = "save addon vpk file",
                 DefaultExtension = "vpk",
-                SuggestedFileName = $"{addonName}.vpk",
+                SuggestedFileName = "pak01_dir.vpk",
+                SuggestedStartLocation = suggestedStartLocation,
                 FileTypeChoices = new[]
                 {
                     new FilePickerFileType("valve pack file (*.vpk)") { Patterns = new[] { "*.vpk" } }
@@ -838,6 +867,13 @@ public partial class MainWindow : Window
         {
             Log("[export] cswin64 directory or target model not configured.");
             await DialogService.ShowErrorAsync(this, "configuration required", "cswin64 directory or target model is not configured.");
+            return;
+        }
+
+        if (!VmdlPipeline.IsValidCsWinDir(csWinDir))
+        {
+            Log("[export] cswin64 directory is invalid or resourcecompiler.exe is missing.");
+            await DialogService.ShowErrorAsync(this, "compiler missing", "cswin64 directory is invalid or missing resourcecompiler.exe.");
             return;
         }
 
@@ -988,6 +1024,17 @@ public partial class MainWindow : Window
     {
         try
         {
+            var targetPath = GetResolvedTargetPath();
+            var citadelDir = TxtCitadelPath.Text?.Trim();
+            if (string.IsNullOrWhiteSpace(targetPath) || string.IsNullOrWhiteSpace(citadelDir))
+            {
+                Log("[launch error] please select an addon and target model first.");
+                await DialogService.ShowErrorAsync(this, "selection required", "please select an addon and target model first.");
+                return;
+            }
+
+            var (_, addonName, _) = VmdlPipeline.ParseCsdkPath(targetPath, citadelDir);
+
             var deadlockInfo = DeadlockLocator.DetectDeadlockInstallation();
             if (!deadlockInfo.IsValid || !File.Exists(deadlockInfo.DeadlockExePath))
             {
@@ -1023,13 +1070,15 @@ public partial class MainWindow : Window
             var psi = new ProcessStartInfo
             {
                 FileName = deadlockInfo.DeadlockExePath,
-                Arguments = "-allowmultiple",
                 WorkingDirectory = Path.GetDirectoryName(deadlockInfo.DeadlockExePath)!,
                 UseShellExecute = true
             };
+            psi.ArgumentList.Add("-addon");
+            psi.ArgumentList.Add(addonName);
+            psi.ArgumentList.Add("-allowmultiple");
 
             Process.Start(psi);
-            Log($"[launch] started deadlock: {deadlockInfo.DeadlockExePath} -allowmultiple");
+            Log($"[launch] started deadlock: {deadlockInfo.DeadlockExePath} -addon {addonName} -allowmultiple");
         }
         catch (Exception ex)
         {

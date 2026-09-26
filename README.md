@@ -15,9 +15,9 @@ A specialized GUI compiler and asset pipeline tool for Valve's Deadlock (Source 
 ## Why This Tool Exists
 
 Deadlock uses AnimGraph 2 (AG2) animation structures. Standard CSDK12 tooling cannot compile AG2 nodes directly into .vmdl files. This tool solves the problem by:
-1. Temporarily updating the .vmdl with compiled vanilla skeleton (.vnmskel) and AnimGraph (.vnmgraph) nodes.
+1. Temporarily adding compiled vanilla skeleton (.vnmskel) and AnimGraph (.vnmgraph) references to a ModelDoc definition for CSWin64.
 2. Invoking the CSWin64 ModelDoc compiler to produce a fully valid compiled model (.vmdl_c).
-3. Deploying the compiled asset directly to the target addon directory and restoring the working source file.
+3. Verifying compiled AG2 references before deployment; with revert enabled, the CSDK .vmdl remains unchanged, and otherwise the injected version is saved.
 
 ---
 
@@ -29,15 +29,15 @@ Deadlock uses AnimGraph 2 (AG2) animation structures. Standard CSDK12 tooling ca
 - **hero preset**: Auto-detects or selects the hero archetype to assign corresponding skeleton and AnimGraph paths.
 
 ### Pipeline Actions
-- **compile**: Runs the full automated compilation pipeline (injects AG2 references, compiles via CSWin64 ModelDoc, copies .vmdl_c to addon game directory, and restores source file).
+- **compile**: Runs the full automated compilation pipeline (injects AG2 references, compiles via CSWin64 ModelDoc, verifies the AG2 references in the compiled .vmdl_c before deployment, copies it to the addon game directory, and leaves the CSDK .vmdl unchanged when revert is enabled (otherwise it saves the injected version).
 - **fix(modeldoc)**: Removes all AG2 nodes from decompiled .vmdl to prevent crash.
 - **get ag2 lists**: Scans Deadlock's pak01_dir.vpk to extract up-to-date .vnmskel and .vnmgraph references for all heroes.
 - **restore ag2 list**: Resets and reloads the default built-in hero preset database.
-- **make vpk...**: Packages the active addon folder directly into a .vpk archive.
+- **make vpk...**: Checks the selected compiled model for required AG2 references and refuses to pack if any are missing; requires a compiled Game addon and suggests `pak01_dir.vpk` in that folder as the output location.
 - **export to cswin64**: Copies the prepared source files directly to the CSWin64 workspace for manual inspection.
 
 ### Environment Paths & Options
-- **cswin64 installation**: Path to your CSWin64 / CS2 bin directory containing the ModelDoc compiler.
+- **cswin64 installation**: Select the CSWin64 installation root that contains `game/bin/win64/resourcecompiler.exe` (or `bin/win64/resourcecompiler.exe`), not the `bin` directory itself.
 - **csdk addons folder**: Path to your Deadlock content/citadel_addons directory.
 - **inject nmskeleton**: Injects compiled vanilla .vnmskel reference before compiling.
 - **inject defaultanimgraph2**: Injects compiled hero .vnmgraph reference before compiling.
@@ -55,7 +55,7 @@ Deadlock uses AnimGraph 2 (AG2) animation structures. Standard CSDK12 tooling ca
 ### Running Prebuilt Binary
 1. Download the latest release from the [Releases](https://github.com/kwlnd/deadlock-vmdl-compiler/releases) page.
 2. Extract the archive and launch DeadlockVmdlCompiler.exe.
-3. Set your **CSWin64 bin directory** (e.g. .../game/csgo/bin/win64 or .../game/bin/win64).
+3. Set your **CSWin64 installation root**: the directory containing `game/bin/win64/resourcecompiler.exe` or `bin/win64/resourcecompiler.exe` (not the `bin` directory itself).
 4. Set your **CSDK12 Addons directory** (e.g. .../content/citadel_addons).
 5. Select the target addon and model, and click **compile**.
 
@@ -64,7 +64,7 @@ Deadlock uses AnimGraph 2 (AG2) animation structures. Standard CSDK12 tooling ca
 ## Building from Source
 
 ### Requirements
-- .NET 10.0 SDK (or .NET 8.0+)
+- .NET 10.0 SDK
 - Windows 10/11 x64
 
 ### Build
@@ -74,7 +74,19 @@ cd deadlock-vmdl-compiler
 
 dotnet build -c Release
 dotnet publish DeadlockVmdlCompiler.csproj -c Release -o ./publish
+
+# Run regression checks
+dotnet run --project tests/RegressionChecks/RegressionChecks.csproj -c Release
+
 ```
+
+Set `DEADLOCK_TEST_VPK` to the path of a real `pak01_dir.vpk` before running the regression command to enable the optional VPK smoke check. The default regression checks run without it.
+
+---
+
+## User Data
+
+Settings and updated hero presets are stored per user under `%LocalAppData%/DeadlockVmdlCompiler`. Legacy files beside the executable are read for compatibility; their values are written to this location on the next settings save or preset update.
 
 ---
 
