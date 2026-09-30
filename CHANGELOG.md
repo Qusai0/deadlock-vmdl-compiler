@@ -1,0 +1,18 @@
+# Changelog
+
+## 1.3.5
+
+- Combined Qusai0's automatic animation detection with the manual AnimationList override. Fixed disabled parent lists, unintended clip unmuting, and incorrect matches based only on file names.
+- Synchronize referenced animation sources outside the model directory while preserving their addon paths.
+- Create CSDK12 addons by exporting the main hero model and its animation, material, texture, and available cloth dependencies using the original game paths.
+- Expanded the export catalog to 44 heroes. Added Baba, Deadman Danny, Nurse Harrow, Rat King, Solomon, and Violet with model-derived AG2 presets and automatic hero detection.
+- Added searchable hero selection and game portraits; matched known AG2 presets to hero names and portraits. Unknown or unavailable portraits use the existing fallback.
+- Updated the desktop interface, app icon, and model preview camera and material loading.
+- Added VCS 72 shader support while preserving the existing cloth exporter.
+- Verify compiled AG2 references before deployment and packaging. Protect compiled models from CSDK12 overwrites until verified packaging or the user's refusal.
+- Publish one self-contained Windows x64 executable, including managed and native dependencies.
+
+The current prerelease game assets for the six newest heroes do not yet include
+their small portraits or compiled default AG2 graph files. Their presets retain
+the exact graph references stored in the game models. Cloth nodes can still
+require manual corrections.

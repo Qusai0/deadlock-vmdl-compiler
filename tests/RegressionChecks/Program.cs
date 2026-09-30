@@ -134,6 +134,63 @@ var root = Path.Combine(Path.GetTempPath(), "deadlock-regression-" + Guid.NewGui
 Directory.CreateDirectory(root);
 try
 {
+    var animationRoot = Path.Combine(root, "animation_sources");
+    var animationDirectory = Path.Combine(animationRoot, "models", "demo");
+    var winRoot = Path.Combine(root, "cswin_animation_sources");
+    var winDirectory = Path.Combine(winRoot, "models", "demo");
+    Directory.CreateDirectory(animationDirectory);
+    Directory.CreateDirectory(winDirectory);
+    File.WriteAllText(Path.Combine(animationDirectory, "active.dmx"), "active source");
+    File.WriteAllText(Path.Combine(animationDirectory, "muted.dmx"), "muted source");
+    var availableAnims = VmdlPipeline.AutoDisableAnimationNodesForCompilation(animationModel,
+        animationDirectory, winDirectory, animationRoot, winRoot);
+    Check(availableAnims.FoundCount == 2 && availableAnims.MissingCount == 0 &&
+          Regex.IsMatch(availableAnims.Content, @"_class\s*=\s*""AnimationList""\s+disabled\s*=\s*false\b") &&
+          availableAnims.Content.Contains("name = \"muted_legacy\" disabled = true", StringComparison.Ordinal),
+        "Automatic animation detection kept the list disabled or unmuted an intentional clip.");
+    var missingReference = animationModel.Replace("models/demo/active.dmx", "models/not_here/active.dmx", StringComparison.Ordinal);
+    var wrongNameMatch = VmdlPipeline.AutoDisableAnimationNodesForCompilation(missingReference,
+        animationDirectory, winDirectory, animationRoot, winRoot);
+    Check(wrongNameMatch.FoundCount == 1 && wrongNameMatch.MissingCount == 1,
+        "A same-named file elsewhere incorrectly satisfied an animation source path.");
+    var allMissing = VmdlPipeline.AutoDisableAnimationNodesForCompilation(animationModel,
+        winDirectory, winDirectory, winRoot, winRoot);
+    Check(allMissing.FoundCount == 0 && allMissing.MissingCount == 2 &&
+          Regex.IsMatch(allMissing.Content, @"_class\s*=\s*""AnimationList""\s+disabled\s*=\s*true\b") &&
+          allMissing.Content.Contains("_class = \"Folder\" disabled = false", StringComparison.Ordinal),
+        "Missing-animation handling did not disable the list or changed unrelated nested nodes.");
+    var forcedOff = VmdlPipeline.PrepareAnimationNodesForCompilation(animationModel, true, true,
+        animationDirectory, winDirectory, animationRoot, winRoot);
+    Check(forcedOff == VmdlPipeline.DisableAnimationNodesForCompilation(animationModel, true),
+        "Automatic mode overrides the manual disable animationlist checkbox.");
+    var strictKeep = VmdlPipeline.PrepareAnimationNodesForCompilation(missingReference, false, false,
+        animationDirectory, winDirectory, animationRoot, winRoot);
+    Check(strictKeep == VmdlPipeline.DisableAnimationNodesForCompilation(missingReference, false),
+        "Turning automatic mode off still disables clips.");
+    var relativeAnims = animationModel.Replace("models/demo/active.dmx", "active.dmx", StringComparison.Ordinal);
+    Check(VmdlPipeline.AutoDisableAnimationNodesForCompilation(relativeAnims,
+        animationDirectory, winDirectory, animationRoot, winRoot).FoundCount == 2,
+        "Model-relative animation paths no longer resolve.");
+    var sharedDirectory = Path.Combine(animationRoot, "models", "shared");
+    Directory.CreateDirectory(sharedDirectory);
+    var sharedBytes = new byte[] { 1, 4, 7, 10 };
+    File.WriteAllBytes(Path.Combine(sharedDirectory, "shared.dmx"), sharedBytes);
+    var sharedAnims = animationModel.Replace("models/demo/active.dmx", "models/shared/shared.dmx", StringComparison.Ordinal);
+    Check(VmdlPipeline.SynchronizeAnimationSourceFiles(sharedAnims, animationDirectory, animationRoot, winRoot) == 2 &&
+          File.ReadAllBytes(Path.Combine(winRoot, "models", "shared", "shared.dmx")).SequenceEqual(sharedBytes),
+        "An animation outside the model directory was not synchronized at its exact addon-relative path.");
+    var commentAnims = animationModel.Replace("name = \"active_legacy\"", "name = \"active_legacy\" description = \"uses {events}\"", StringComparison.Ordinal) +
+                       "\n// { _class = \"AnimFile\" source_filename = \"missing.dmx\" }";
+    Check(VmdlPipeline.AutoDisableAnimationNodesForCompilation(commentAnims,
+        animationDirectory, winDirectory, animationRoot, winRoot).FoundCount == 2,
+        "Comments or braces inside strings confused automatic animation detection.");
+    var oldConfig = JsonSerializer.Deserialize<AppConfig>("{\"chk_disable_anim_list\":true}")!;
+    var contributorConfig = JsonSerializer.Deserialize<AppConfig>("{\"chk_auto_detect_anims\":false}")!;
+    Check(oldConfig.ChkDisableAnimList && oldConfig.ChkAutoDetectAnims &&
+          !contributorConfig.ChkDisableAnimList && !contributorConfig.ChkAutoDetectAnims,
+        "Settings from either version lose their animation mode during migration.");
+    Console.WriteLine("Combined manual and automatic animation checks passed.");
+
     var gameDir = Path.Combine(root, "game");
     var modelDir = Path.Combine(gameDir, "models", "heroes_staging", "demo");
     Directory.CreateDirectory(modelDir);
@@ -362,7 +419,7 @@ try
                 var meshPaths = Regex.Matches(modelText,
                         @"_class\s*=\s*""RenderMeshFile""[^}]*?\bfilename\s*=\s*""([^""]+\.dmx)""")
                     .Select(match => match.Groups[1].Value).Distinct().ToArray();
-                var dmxPaths = Regex.Matches(modelText, @"\bfilename\s*=\s*""([^""]+\.dmx)""")
+                var dmxPaths = Regex.Matches(modelText, @"\b(?:source_)?filename\s*=\s*""([^""]+\.dmx)""")
                     .Select(match => match.Groups[1].Value).Distinct().ToArray();
                 Check(meshPaths.Length > 0 && dmxPaths.All(path =>
                         File.Exists(Path.Combine(addon.ContentDirectory, path.Replace('/', Path.DirectorySeparatorChar)))),
@@ -378,6 +435,11 @@ try
                 Check(Directory.EnumerateFiles(addon.ContentDirectory, "*.png", SearchOption.AllDirectories).Any(),
                     $"The {hero.DisplayName} export is missing material textures.");
                 var preset = HeroDatabase.GetVisiblePresets()[presetKey];
+                var animationFiles = VmdlPipeline.AutoDisableAnimationNodesForCompilation(modelText,
+                    Path.GetDirectoryName(addon.MainVmdlPath)!, Path.GetDirectoryName(addon.MainVmdlPath)!,
+                    addon.ContentDirectory, addon.ContentDirectory);
+                Check(animationFiles.MissingCount == 0,
+                    $"Automatic detection reports missing animation sources in the {hero.DisplayName} export.");
                 var injected = VmdlPipeline.UpgradeVmdlContent(modelText, preset.Skel, preset.Graph,
                     preset.UiGraph);
                 Check(!injected.Changes.Any(change => change.StartsWith("Error:", StringComparison.Ordinal)) &&

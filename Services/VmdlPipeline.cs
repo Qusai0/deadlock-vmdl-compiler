@@ -273,7 +273,8 @@ public static class VmdlPipeline
         string? expectedGraphPath = null,
         string? expectedUiGraphPath = null,
         Action<string>? beforeDeploy = null,
-        Action<string, string>? afterDeploy = null)
+        Action<string, string>? afterDeploy = null,
+        bool autoDetectAnims = true)
     {
         var cfg = ConfigManager.LoadConfig();
         var useCsWinDir = !string.IsNullOrWhiteSpace(cswinDir) ? cswinDir : (!string.IsNullOrWhiteSpace(cfg.CsWinDir) ? cfg.CsWinDir : DefaultCsWinDir);
@@ -301,6 +302,12 @@ public static class VmdlPipeline
         var csWinVmdlDir = Path.GetDirectoryName(csWinVmdlPath)!;
         var csWinCompiledVmdlc = Path.Combine(useCsWinDir, "game", "csgo_addons", addonName, subpath + "_c");
         var csdkVmdlDir = Path.GetDirectoryName(csdk12VmdlPath);
+        var normalizedSource = Path.GetFullPath(csdk12VmdlPath).Replace('\\', '/');
+        var normalizedSubpath = subpath.Replace('\\', '/');
+        var csdkAddonRoot = normalizedSource.EndsWith("/" + normalizedSubpath, StringComparison.OrdinalIgnoreCase)
+            ? normalizedSource[..^(normalizedSubpath.Length + 1)].Replace('/', Path.DirectorySeparatorChar)
+            : csdkVmdlDir ?? string.Empty;
+        var csWinAddonRoot = Path.Combine(useCsWinDir, "content", "csgo_addons", addonName);
         Directory.CreateDirectory(csWinVmdlDir);
 
         // 1. Sync mesh/model files (.dmx, .fbx, .smd, .obj, .vmat, .png, .vanim) to CSWin64 so resourcecompiler finds them
@@ -345,12 +352,28 @@ public static class VmdlPipeline
             onLog?.Invoke($"[sync] synchronized {copied} updated asset(s) to cswin64");
         }
 
-        // 2. Apply the checkbox state to the temporary CSWin64 ModelDoc.
+        // Animations can live outside the model folder. Preserve their addon-relative
+        // paths in CSWin64 before deciding whether a clip is missing.
+        if (!disableAnimationList)
+        {
+            try
+            {
+                SynchronizeAnimationSourceFiles(upgradedVmdlContent,
+                    csdkVmdlDir ?? string.Empty, csdkAddonRoot, csWinAddonRoot, onLog);
+            }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+            {
+                return (false, $"Could not sync animation source: {ex.Message}");
+            }
+        }
+
+        // 2. Keep the manual override and the contributor's automatic mode.
         progress?.Report(new CompileProgress(3, 5, 50, "[3/5] preparing modeldoc", "temporary definition..."));
-        var csWinContent = DisableAnimationNodesForCompilation(upgradedVmdlContent, disableAnimationList);
+        var csWinContent = PrepareAnimationNodesForCompilation(upgradedVmdlContent,
+            disableAnimationList, autoDetectAnims, csdkVmdlDir ?? string.Empty, csWinVmdlDir,
+            csdkAddonRoot, csWinAddonRoot, onLog);
 
         await File.WriteAllTextAsync(csWinVmdlPath, csWinContent);
-        onLog?.Invoke($"[prepare] AnimationList {(disableAnimationList ? "disabled" : "enabled")} for CSWin64 compilation");
         onLog?.Invoke("[prepare] wrote temporary modeldoc definition to cswin64 addon");
 
         // A successful compiler exit must not be mistaken for an old output from a previous run.
@@ -542,7 +565,8 @@ public static class VmdlPipeline
         IProgress<CompileProgress>? progress = null,
         Action<string>? onLog = null,
         Action<string>? beforeDeploy = null,
-        Action<string, string>? afterDeploy = null)
+        Action<string, string>? afterDeploy = null,
+        bool autoDetectAnims = true)
     {
         filepath = Path.GetFullPath(filepath);
         if (!File.Exists(filepath))
@@ -593,6 +617,7 @@ public static class VmdlPipeline
                 cswinDir: cswinDir,
                 citadelAddonsDir: citadelAddonsDir,
                 disableAnimationList: disableAnimationList,
+                autoDetectAnims: autoDetectAnims,
                 progress: progress,
                 onLog: onLog,
                 expectedSkelPath: addSkel ? useSkel : null,
@@ -741,6 +766,56 @@ public static class VmdlPipeline
         content = DisableNodeByClass(content, "EmptyAnimGraph");
         content = DisableNodeByClass(content, "AnimGraph");
         return content;
+    }
+
+    public static string PrepareAnimationNodesForCompilation(string content,
+        bool disableAnimationList, bool autoDetectAnims, string csdkVmdlDir,
+        string csWinVmdlDir, string csdkAddonRoot, string csWinAddonRoot, Action<string>? onLog = null)
+    {
+        if (disableAnimationList || !autoDetectAnims)
+        {
+            onLog?.Invoke($"[animations] AnimationList {(disableAnimationList ? "disabled by manual override" : "enabled; automatic detection off")}");
+            return DisableAnimationNodesForCompilation(content, disableAnimationList);
+        }
+        var result = AutoDisableAnimationNodesForCompilation(content,
+            csdkVmdlDir, csWinVmdlDir, csdkAddonRoot, csWinAddonRoot);
+        onLog?.Invoke($"[animations] auto-detected {result.FoundCount} source file(s), {result.MissingCount} missing; missing clips disabled, existing clip mute settings preserved");
+        return result.Content;
+    }
+
+    public static int SynchronizeAnimationSourceFiles(string content, string csdkVmdlDir,
+        string csdkAddonRoot, string csWinAddonRoot, Action<string>? onLog = null)
+    {
+        var copied = 0;
+        foreach (var filename in ModelDocAg2Editor.GetAnimationSourcePaths(content))
+        {
+            var source = AnimationSourceResolver.Resolve(filename, csdkAddonRoot, csdkVmdlDir);
+            if (source == null) continue;
+            var destination = Path.GetFullPath(Path.Combine(csWinAddonRoot,
+                Path.GetRelativePath(csdkAddonRoot, source)));
+            if (!destination.StartsWith(Path.TrimEndingDirectorySeparator(Path.GetFullPath(csWinAddonRoot)) +
+                    Path.DirectorySeparatorChar, StringComparison.OrdinalIgnoreCase))
+                throw new IOException($"Animation path leaves the CSWin64 addon: {filename}");
+            if (!File.Exists(destination) || new FileInfo(source).Length != new FileInfo(destination).Length ||
+                File.GetLastWriteTimeUtc(source) > File.GetLastWriteTimeUtc(destination))
+            {
+                Directory.CreateDirectory(Path.GetDirectoryName(destination)!);
+                File.Copy(source, destination, overwrite: true);
+                copied++;
+                onLog?.Invoke($"[sync animation] {filename}");
+            }
+        }
+        return copied;
+    }
+
+    /// <summary>Preserves available clips and disables missing sources at their exact authored paths.</summary>
+    public static (string Content, int FoundCount, int MissingCount) AutoDisableAnimationNodesForCompilation(
+        string content, string csdkVmdlDir, string csWinVmdlDir, string csdkAddonRoot, string csWinAddonRoot)
+    {
+        content = DisableAnimationNodesForCompilation(content, disableAnimationList: false);
+        return ModelDocAg2Editor.ApplyAnimationFileAvailability(content, filename =>
+            AnimationSourceResolver.Resolve(filename, csdkAddonRoot, csdkVmdlDir) != null ||
+            AnimationSourceResolver.Resolve(filename, csWinAddonRoot, csWinVmdlDir) != null);
     }
 
     private static string DisableNodeByClass(string content, string className) =>

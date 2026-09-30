@@ -346,7 +346,11 @@
                                 <Border Height="1" Background="{StaticResource StudioBorder}"/>
                                 <CheckBox x:Name="ChkDisableAnimList"
                                           Content="disable animationlist (uncheck to keep animations)"
-                                          IsChecked="True"/>
+                                          IsChecked="False"/>
+                                <CheckBox x:Name="ChkAutoDetectAnims"
+                                          Content="auto-detect animations (disable missing clips)"
+                                          IsChecked="True"
+                                          ToolTip.Tip="Keeps available animations and skips missing source files. Disable animationlist takes priority."/>
                                 <CheckBox x:Name="ChkRevert"
                                           Content="revert vmdl back (clean workspace after compile)"
                                           IsChecked="True"/>

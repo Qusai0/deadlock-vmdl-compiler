@@ -42,7 +42,8 @@ Deadlock uses AnimGraph 2 (AG2) animation structures. Standard CSDK12 tooling ca
 - **inject nmskeleton**: Injects compiled vanilla .vnmskel reference before compiling.
 - **inject defaultanimgraph2**: Injects compiled hero .vnmgraph reference before compiling.
 - **inject ui animgraph2**: Injects compiled hero UI .vnmgraph reference before compiling.
-- **disable animationlist**: Disables AnimationList during compile to avoid missing animation DMX errors. Uncheck to opt out and preserve active animations.
+- **disable animationlist**: Forces the entire AnimationList off during compile. This manual override takes priority over automatic detection. Uncheck to preserve animations.
+- **auto-detect animations**: Keeps available animation sources active and disables only missing clips in the temporary CSWin64 model. Existing per-clip mute flags are preserved. Sources are resolved at their authored paths, including model-relative paths; referenced animations outside the model folder are copied to the matching CSWin64 addon paths. Turn this option off to compile all configured clips without automatic filtering. Both settings are saved, including settings from older versions.
 
 ### Visuals
 - **3D preview**: Interactive real-time 3D viewport with mesh rendering and camera controls.
@@ -102,6 +103,7 @@ MIT License
 ## Credits & Inspiration
 
 - Original concept idea by **Qusai** from the Deadlock Modding Discord server.
+- Automatic animation source detection contributed by **Qusai0**, integrated with manual controls in v1.3.5.
 - Icons and resource parsing powered by [ValveResourceFormat (Source 2 Viewer)](https://github.com/SteamDatabase/ValveResourceFormat) by SteamDatabase.
 
 ---

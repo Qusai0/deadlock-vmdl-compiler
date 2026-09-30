@@ -10,6 +10,67 @@ internal static class ModelDocAg2Editor
 {
     private readonly record struct Node(int Start, int End, string ClassName);
 
+    internal static IEnumerable<string> GetAnimationSourcePaths(string content) =>
+        EnumerateAllNodes(content)
+            .Where(node => node.ClassName.Equals("AnimFile", StringComparison.OrdinalIgnoreCase))
+            .Select(node => FieldValue(content, node, "source_filename") is { Length: > 0 } source
+                ? source : FieldValue(content, node, "filename"))
+            .Where(path => path.Length > 0).Distinct(StringComparer.OrdinalIgnoreCase);
+
+    internal static (string Content, int FoundCount, int MissingCount) ApplyAnimationFileAvailability(
+        string content, Func<string, bool> sourceExists)
+    {
+        var nodes = EnumerateAllNodes(content)
+            .Where(node => node.ClassName.Equals("AnimFile", StringComparison.OrdinalIgnoreCase))
+            .OrderByDescending(node => node.Start).ToArray();
+        var found = 0;
+        var missing = 0;
+        var activeFound = 0;
+        var activeMissing = 0;
+        foreach (var node in nodes)
+        {
+            var filename = FieldValue(content, node, "source_filename");
+            if (filename.Length == 0) filename = FieldValue(content, node, "filename");
+            var muted = IsNodeDisabled(content, node);
+            if (filename.Length > 0 && sourceExists(filename))
+            {
+                found++;
+                if (!muted) activeFound++;
+                continue; // Keep a deliberate per-clip disabled flag.
+            }
+            missing++;
+            if (muted) continue;
+            activeMissing++;
+            var block = content.Substring(node.Start, node.End - node.Start);
+            block = SetNodeDisabled(block, "AnimFile", disabled: true);
+            content = content.Remove(node.Start, node.End - node.Start).Insert(node.Start, block);
+        }
+        content = SetNodeDisabled(content, "AnimationList", activeFound == 0 && activeMissing > 0);
+        return (content, found, missing);
+    }
+
+    private static bool IsNodeDisabled(string content, Node node) =>
+        Regex.Matches(content.Substring(node.Start, node.End - node.Start), @"\bdisabled\s*=\s*true\b",
+            RegexOptions.IgnoreCase).Cast<Match>().Any(field =>
+                !IsIgnoredAt(content, node.Start + field.Index) &&
+                IsDirectField(content, node, node.Start + field.Index));
+
+    private static IEnumerable<Node> EnumerateAllNodes(string content)
+    {
+        var starts = new Stack<int>();
+        for (var i = 0; i < content.Length; i++)
+        {
+            var skipped = SkipIgnored(content, i);
+            if (skipped != i) { i = skipped - 1; continue; }
+            if (content[i] == '{') starts.Push(i);
+            else if (content[i] == '}' && starts.Count > 0)
+            {
+                var node = new Node(starts.Pop(), i + 1, string.Empty);
+                yield return node with { ClassName = FieldValue(content, node, "_class") };
+            }
+        }
+    }
+
     internal static string SetNodeDisabled(string content, string className, bool disabled)
     {
         var classPattern = new Regex(@"\b_class\s*=\s*""" + Regex.Escape(className) + @"""",

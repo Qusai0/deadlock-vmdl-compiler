@@ -237,12 +237,14 @@ public partial class MainWindow : Window
             ChkGraph.IsChecked = _config.ChkGraph;
             ChkUiGraph.IsChecked = _config.ChkUiGraph;
             ChkDisableAnimList.IsChecked = _config.ChkDisableAnimList;
+            ChkAutoDetectAnims.IsChecked = _config.ChkAutoDetectAnims;
 
             ChkRevert.IsCheckedChanged += (_, _) => SaveConfig();
             ChkSkel.IsCheckedChanged += (_, _) => SaveConfig();
             ChkGraph.IsCheckedChanged += (_, _) => SaveConfig();
             ChkUiGraph.IsCheckedChanged += (_, _) => SaveConfig();
             ChkDisableAnimList.IsCheckedChanged += (_, _) => SaveConfig();
+            ChkAutoDetectAnims.IsCheckedChanged += (_, _) => SaveConfig();
 
             // Environment validation on startup
             ValidateEnvironmentOnStartup();
@@ -613,6 +615,7 @@ public partial class MainWindow : Window
         _config.ChkGraph = ChkGraph.IsChecked == true;
         _config.ChkUiGraph = ChkUiGraph.IsChecked == true;
         _config.ChkDisableAnimList = ChkDisableAnimList.IsChecked == true;
+        _config.ChkAutoDetectAnims = ChkAutoDetectAnims.IsChecked == true;
 
         if (!ConfigManager.SaveConfig(_config))
         {
@@ -1114,6 +1117,7 @@ public partial class MainWindow : Window
                 cswinDir: csWinDir,
                 citadelAddonsDir: citadelDir,
                 disableAnimationList: ChkDisableAnimList.IsChecked == true,
+                autoDetectAnims: ChkAutoDetectAnims.IsChecked == true,
                 progress: progress,
                 onLog: Log,
                 beforeDeploy: ReleaseProtectionForOutput,
