@@ -238,5 +238,157 @@
     "skel": "models/heroes_wip/werewolf/transform/werewolf_transform.vnmskel",
     "graph": "animgraphs/animgraph2/hero/hero.vnmgraph\u002Bwerewolf_transform.vnmgraph",
     "ui_graph": "animgraphs/animgraph2/hero/hero_ui.vnmgraph\u002Bwerewolf_transform.vnmgraph"
+  },
+  "neutral_barrel_mimic_01": {
+    "skel": "models/npc_units/neutral_barrel_mimic_01/neutral_barrel_mimic_01.vnmskel",
+    "graph": "",
+    "ui_graph": "",
+    "named_graphs": {
+      "Neutrals": "animgraphs/animgraph2/npc_units/neutrals/npc_neutral.vnmgraph\u002Bbarrel_mimic.vnmgraph"
+    }
+  },
+  "neutral_barrel_mimic_02": {
+    "skel": "models/npc_units/neutral_barrel_mimic_01/neutral_barrel_mimic_01.vnmskel",
+    "graph": "",
+    "ui_graph": "",
+    "named_graphs": {
+      "Neutrals": "animgraphs/animgraph2/npc_units/neutrals/npc_neutral.vnmgraph\u002Bbarrel_mimic.vnmgraph"
+    }
+  },
+  "neutral_ct_lantern": {
+    "skel": "models/npc_units/neutral_ct_lanterns/neutral_ct_lantern_skel.vnmskel",
+    "graph": "models/npc_units/neutral_ct_lanterns/neutral_ct_lantern.vnmgraph",
+    "ui_graph": "",
+    "named_graphs": {
+      "Neutrals": "animgraphs/animgraph2/npc_units/neutrals/npc_neutral.vnmgraph\u002Blantern.vnmgraph"
+    }
+  },
+  "neutral_ct_lantern_elite": {
+    "skel": "models/npc_units/neutral_ct_lanterns/neutral_ct_lantern_skel.vnmskel",
+    "graph": "models/npc_units/neutral_ct_lanterns/neutral_ct_lantern.vnmgraph",
+    "ui_graph": "",
+    "named_graphs": {
+      "Neutrals": "animgraphs/animgraph2/npc_units/neutrals/npc_neutral.vnmgraph\u002Blantern.vnmgraph"
+    }
+  },
+  "neutral_drain_creature": {
+    "skel": "models/npc/neutral_drain_creature/neutral_drain_creature.vnmskel",
+    "graph": "",
+    "ui_graph": "",
+    "named_graphs": {
+      "Neutrals": "animgraphs/animgraph2/npc_units/neutrals/npc_neutral.vnmgraph\u002Bdrain_creature.vnmgraph"
+    }
+  },
+  "neutral_drain_creature_large": {
+    "skel": "models/npc/neutral_drain_creature/neutral_drain_creature.vnmskel",
+    "graph": "",
+    "ui_graph": "",
+    "named_graphs": {
+      "Neutrals": "animgraphs/animgraph2/npc_units/neutrals/npc_neutral.vnmgraph\u002Bdrain_creature.vnmgraph"
+    }
+  },
+  "neutral_library_bookmoth": {
+    "skel": "models/npc_units/neutral_library_bookmoth/neutral_library_bookmoth_skel.vnmskel",
+    "graph": "models/npc_units/neutral_library_bookmoth/animgraph_neutral_library_bookmoth.vnmgraph",
+    "ui_graph": "",
+    "named_graphs": {
+      "Neutrals": "animgraphs/animgraph2/npc_units/neutrals/npc_neutral.vnmgraph\u002Bbookmoth.vnmgraph"
+    }
+  },
+  "neutral_library_watcher_01": {
+    "skel": "models/npc_units/neutral_library_watcher_01/neutral_library_watcher_01.vnmskel",
+    "graph": "",
+    "ui_graph": "",
+    "named_graphs": {
+      "Neutrals": "animgraphs/animgraph2/npc_units/neutrals/npc_neutral.vnmgraph\u002Blibrary_watcher.vnmgraph"
+    }
+  },
+  "neutral_mushroom_large_01": {
+    "skel": "models/npc_units/neutral_mushroom_small_01/neutral_mushroom_small_01.vnmskel",
+    "graph": "",
+    "ui_graph": "",
+    "named_graphs": {
+      "Neutrals": "animgraphs/animgraph2/npc_units/neutrals/npc_neutral.vnmgraph\u002Bmushroom_large.vnmgraph"
+    }
+  },
+  "neutral_mushroom_small_01": {
+    "skel": "models/npc_units/neutral_mushroom_small_01/neutral_mushroom_small_01.vnmskel",
+    "graph": "",
+    "ui_graph": "",
+    "named_graphs": {
+      "Neutrals": "animgraphs/animgraph2/npc_units/neutrals/npc_neutral.vnmgraph\u002Bmushroom_small.vnmgraph"
+    }
+  },
+  "neutral_park_watcher_01": {
+    "skel": "models/npc_units/neutral_underhand_01/neutral_underhand.vnmskel",
+    "graph": "",
+    "ui_graph": "",
+    "named_graphs": {
+      "Neutrals": "animgraphs/animgraph2/npc_units/neutrals/npc_neutral.vnmgraph\u002Bunderhand.vnmgraph"
+    }
+  },
+  "neutral_pigeon_cerberus": {
+    "skel": "models/npc_units/neutral_pigeon_cerberus/neutral_pigeon_cerberus.vnmskel",
+    "graph": "",
+    "ui_graph": "",
+    "named_graphs": {
+      "Neutrals": "animgraphs/animgraph2/npc_units/neutrals/npc_neutral.vnmgraph\u002Bpigeon_cerberus.vnmgraph"
+    }
+  },
+  "neutral_plant_large_01": {
+    "skel": "models/npc_units/neutral_plant_large_01/neutral_plant_large_01.vnmskel",
+    "graph": "",
+    "ui_graph": "",
+    "named_graphs": {
+      "Neutrals": "animgraphs/animgraph2/npc_units/neutrals/npc_neutral.vnmgraph\u002Bplant_large.vnmgraph"
+    }
+  },
+  "neutral_plant_small_01": {
+    "skel": "models/npc_units/neutral_plant_small_01/neutral_plant_small_01.vnmskel",
+    "graph": "",
+    "ui_graph": "",
+    "named_graphs": {
+      "Neutrals": "animgraphs/animgraph2/npc_units/neutrals/npc_neutral.vnmgraph\u002Bplant.vnmgraph"
+    }
+  },
+  "neutral_specimen_01": {
+    "skel": "models/npc_units/neutral_specimens/neutral_specimen_01.vnmskel",
+    "graph": "",
+    "ui_graph": "",
+    "named_graphs": {
+      "Neutrals": "animgraphs/animgraph2/npc_units/neutrals/npc_neutral.vnmgraph\u002Bspecimen.vnmgraph"
+    }
+  },
+  "neutral_theatre_puppeteer_01": {
+    "skel": "models/npc_units/neutral_theatre_puppeteer_01/neutral_theatre_puppeteer_01.vnmskel",
+    "graph": "",
+    "ui_graph": "",
+    "named_graphs": {
+      "Neutrals": "animgraphs/animgraph2/npc_units/neutrals/npc_neutral.vnmgraph\u002Bpuppeteer.vnmgraph"
+    }
+  },
+  "neutral_theatre_puppeteer_02": {
+    "skel": "models/npc_units/neutral_theatre_puppeteer_01/neutral_theatre_puppeteer_01.vnmskel",
+    "graph": "",
+    "ui_graph": "",
+    "named_graphs": {
+      "Neutrals": "animgraphs/animgraph2/npc_units/neutrals/npc_neutral.vnmgraph\u002Bpuppeteer.vnmgraph"
+    }
+  },
+  "neutral_theatre_puppeteer_03": {
+    "skel": "models/npc_units/neutral_theatre_puppeteer_01/neutral_theatre_puppeteer_01.vnmskel",
+    "graph": "",
+    "ui_graph": "",
+    "named_graphs": {
+      "Neutrals": "animgraphs/animgraph2/npc_units/neutrals/npc_neutral.vnmgraph\u002Bpuppeteer.vnmgraph"
+    }
+  },
+  "neutral_underhand_01": {
+    "skel": "models/npc_units/neutral_underhand_01/neutral_underhand.vnmskel",
+    "graph": "",
+    "ui_graph": "",
+    "named_graphs": {
+      "Neutrals": "animgraphs/animgraph2/npc_units/neutrals/npc_neutral.vnmgraph\u002Bunderhand.vnmgraph"
+    }
   }
 }

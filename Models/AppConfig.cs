@@ -45,4 +45,10 @@ public class AppConfig
 
     [JsonPropertyName("prompt_vpk_after_compile")]
     public bool PromptVpkAfterCompile { get; set; } = true;
+
+    [JsonPropertyName("hero_paths_file")]
+    public string? HeroPathsFile { get; set; }
+
+    [JsonPropertyName("use_builtin_hero_paths")]
+    public bool UseBuiltInHeroPaths { get; set; }
 }

@@ -7,5 +7,6 @@
   </PropertyGroup>
   <ItemGroup>
     <ProjectReference Include="../../DeadlockVmdlCompiler.csproj" />
+    <EmbeddedResource Include="NeutralAg2Models.json" />
   </ItemGroup>
 </Project>

@@ -146,6 +146,12 @@
                                     </DataTemplate>
                                 </ComboBox.ItemTemplate>
                             </ComboBox>
+                            <Grid ColumnDefinitions="*,Auto">
+                                <TextBlock x:Name="LblHeroPathsSource" Text="built-in presets" Classes="field-hint"
+                                           TextTrimming="CharacterEllipsis" VerticalAlignment="Center"/>
+                                <Button x:Name="BtnDefaultHeroPaths" Grid.Column="1" Classes="utility" Height="24"
+                                        Content="default list" Click="BtnDefaultHeroPaths_Click" IsVisible="False"/>
+                            </Grid>
                         </StackPanel>
                     </Border>
 
@@ -333,7 +339,7 @@
                                                  Foreground="{StaticResource StudioTextMuted}"/>
                                     </StackPanel>
                                     <StackPanel Spacing="3">
-                                        <CheckBox x:Name="ChkGraph" Content="inject defaultanimgraph2" IsChecked="True"/>
+                                        <CheckBox x:Name="ChkGraph" Content="inject animgraph2 (default &amp; named)" IsChecked="True"/>
                                         <TextBox x:Name="TxtGraph" Height="26" IsReadOnly="True"
                                                  Foreground="{StaticResource StudioTextMuted}"/>
                                     </StackPanel>
@@ -344,6 +350,7 @@
                                     </StackPanel>
                                 </StackPanel>
                                 <Border Height="1" Background="{StaticResource StudioBorder}"/>
+                                <TextBlock x:Name="LblNamedGraphs" Classes="field-hint" TextWrapping="Wrap" IsVisible="False"/>
                                 <CheckBox x:Name="ChkDisableAnimList"
                                           Content="disable animationlist (uncheck to keep animations)"
                                           IsChecked="False"/>

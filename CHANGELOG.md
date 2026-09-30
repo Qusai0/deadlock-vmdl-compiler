@@ -1,5 +1,9 @@
 # Changelog
 
+## 1.3.7
+
+- Added support for neutral creeps.
+
 ## 1.3.6
 
 - Locate Deadlock using Steam's `libraryfolders.vdf` and `appmanifest_1422450.acf`, taking the game folder from `installdir`. Removed fixed drive paths and game folder name guesses.

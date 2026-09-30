@@ -25,6 +25,8 @@ public partial class MainWindow : Window
     private bool _isProcessing;
     private bool _isInitializing = true;
     private bool _isUpdatingSelection = false;
+    private bool _isApplyingPreset;
+    private IReadOnlyDictionary<string, string>? _selectedNamedGraphs;
     private List<HeroPresetChoice> _presetChoices = new();
     private Dictionary<string, Bitmap> _presetPortraits = new(StringComparer.OrdinalIgnoreCase);
     private readonly SemaphoreSlim _portraitLoadGate = new(1, 1);
@@ -32,7 +34,8 @@ public partial class MainWindow : Window
     private int _logLineCount = 0;
     private readonly System.Text.StringBuilder _logBuffer = new();
     private sealed record ProtectedModelState(
-        CompiledModelProtection Guard, string? Skel, string? Graph, string? UiGraph);
+        CompiledModelProtection Guard, string? Skel, string? Graph, string? UiGraph,
+        IReadOnlyDictionary<string, string>? NamedGraphs);
 
     private readonly Dictionary<string, ProtectedModelState> _protectedModels =
         new(StringComparer.OrdinalIgnoreCase);
@@ -56,9 +59,11 @@ public partial class MainWindow : Window
 
     private void PopulateHeroPresets()
     {
+        var previousKey = (CmbHeroPreset.SelectedItem as HeroPresetChoice)?.Key;
         var choices = HeroDatabase.GetVisiblePresets()
             .Select(pair => new HeroPresetChoice(pair.Key,
-                HeroPresetMatcher.FindKnownHero(pair.Key, pair.Value)))
+                HeroPresetMatcher.FindKnownHero(pair.Key, pair.Value),
+                detail: pair.Value.NamedGraphs.ContainsKey("Neutrals") ? "neutral AG2 preset" : null))
             .OrderBy(choice => choice.Hero == null ? 1 : 0)
             .ThenBy(choice => choice.DisplayName, StringComparer.OrdinalIgnoreCase)
             .ThenBy(choice => choice.Key, StringComparer.OrdinalIgnoreCase)
@@ -71,7 +76,43 @@ public partial class MainWindow : Window
         }
         _presetChoices = choices;
         CmbHeroPreset.ItemsSource = choices;
-        CmbHeroPreset.SelectedIndex = 0;
+        CmbHeroPreset.SelectedItem = choices.FirstOrDefault(choice => choice.Key == previousKey) ?? choices[0];
+        var source = HeroDatabase.ActiveCustomFilePath;
+        LblHeroPathsSource.Text = $"{(source == null ? "built-in list" : Path.GetFileName(source))} · {choices.Count - 1} presets";
+        ToolTip.SetTip(LblHeroPathsSource, source ?? HeroDatabase.CustomLoadError ?? "Presets bundled inside this EXE.");
+        BtnDefaultHeroPaths.IsVisible = source != null || !string.IsNullOrWhiteSpace(_config.HeroPathsFile);
+    }
+
+    private void ApplyPresetPaths(HeroPreset? preset)
+    {
+        _isApplyingPreset = true;
+        try
+        {
+            TxtSkel.Text = preset?.Skel ?? string.Empty;
+            TxtGraph.Text = preset?.Graph ?? string.Empty;
+            TxtUiGraph.Text = preset?.UiGraph ?? string.Empty;
+            _selectedNamedGraphs = preset?.NamedGraphs is { Count: > 0 } graphs
+                ? new Dictionary<string, string>(graphs, StringComparer.OrdinalIgnoreCase) : null;
+            LblNamedGraphs.IsVisible = _selectedNamedGraphs != null;
+            LblNamedGraphs.Text = _selectedNamedGraphs == null ? string.Empty :
+                "named graphs: " + string.Join(", ", _selectedNamedGraphs.Keys);
+            ToolTip.SetTip(LblNamedGraphs, _selectedNamedGraphs == null ? null :
+                string.Join("\n", _selectedNamedGraphs.Select(pair => $"{pair.Key}: {pair.Value}")));
+            ChkUiGraph.IsEnabled = preset == null || !string.IsNullOrWhiteSpace(preset.UiGraph);
+            ChkUiGraph.IsChecked = ChkUiGraph.IsEnabled && _config.ChkUiGraph;
+        }
+        finally { _isApplyingPreset = false; }
+    }
+
+    private void BtnDefaultHeroPaths_Click(object? sender, RoutedEventArgs e)
+    {
+        if (_isProcessing) return;
+        _config.HeroPathsFile = null;
+        _config.UseBuiltInHeroPaths = true;
+        HeroDatabase.UseBuiltInDatabase();
+        SaveConfig();
+        PopulateHeroPresets();
+        Log("[ag2 presets] using the built-in preset list.");
     }
 
     private async Task LoadPresetPortraitsAsync(string vpkPath)
@@ -227,6 +268,7 @@ public partial class MainWindow : Window
 
             // Populate presets
             PopulateHeroPresets();
+            if (HeroDatabase.CustomLoadError != null) Log($"[ag2 presets] {HeroDatabase.CustomLoadError}");
 
             // Apply config to UI
             TxtCsWinPath.Text = _config.CsWinDir ?? string.Empty;
@@ -578,15 +620,11 @@ public partial class MainWindow : Window
             {
                 CmbHeroPreset.SelectedIndex = 0;
 
-                TxtSkel.Text = string.Empty;
-                TxtGraph.Text = string.Empty;
-                TxtUiGraph.Text = string.Empty;
+                ApplyPresetPaths(null);
                 return;
             }
 
-            TxtSkel.Text = preset.Skel ?? string.Empty;
-            TxtGraph.Text = preset.Graph ?? string.Empty;
-            TxtUiGraph.Text = preset.UiGraph ?? string.Empty;
+            ApplyPresetPaths(preset);
 
             var match = _presetChoices.FirstOrDefault(choice =>
                 choice.Key.Equals(heroName, StringComparison.OrdinalIgnoreCase));
@@ -605,7 +643,7 @@ public partial class MainWindow : Window
 
     private void SaveConfig()
     {
-        if (_isInitializing) return;
+        if (_isInitializing || _isApplyingPreset) return;
 
         _config.CsWinDir = TxtCsWinPath.Text?.Trim() ?? string.Empty;
         _config.CitadelAddonsDir = TxtCitadelPath.Text?.Trim() ?? string.Empty;
@@ -613,7 +651,7 @@ public partial class MainWindow : Window
         _config.ChkRevert = ChkRevert.IsChecked == true;
         _config.ChkSkel = ChkSkel.IsChecked == true;
         _config.ChkGraph = ChkGraph.IsChecked == true;
-        _config.ChkUiGraph = ChkUiGraph.IsChecked == true;
+        if (ChkUiGraph.IsEnabled) _config.ChkUiGraph = ChkUiGraph.IsChecked == true;
         _config.ChkDisableAnimList = ChkDisableAnimList.IsChecked == true;
         _config.ChkAutoDetectAnims = ChkAutoDetectAnims.IsChecked == true;
 
@@ -691,15 +729,14 @@ public partial class MainWindow : Window
             {
                 var path = GetResolvedTargetPath();
                 if (!string.IsNullOrEmpty(path)) UpdateHeroDetailsFromPath(path);
+                else ApplyPresetPaths(null);
             }
             else
             {
                 var db = HeroDatabase.GetVisiblePresets();
                 if (db.TryGetValue(choice.Key, out var preset))
                 {
-                    TxtSkel.Text = preset.Skel ?? string.Empty;
-                    TxtGraph.Text = preset.Graph ?? string.Empty;
-                    TxtUiGraph.Text = preset.UiGraph ?? string.Empty;
+                    ApplyPresetPaths(preset);
                 }
             }
         }
@@ -840,14 +877,17 @@ public partial class MainWindow : Window
                 ? (ChkSkel.IsChecked == true ? TxtSkel.Text?.Trim() ?? string.Empty : null)
                 : protectedState.Skel;
             var expectedGraph = protectedState is null
-                ? (ChkGraph.IsChecked == true ? TxtGraph.Text?.Trim() ?? string.Empty : null)
+                ? (ChkGraph.IsChecked == true && !(string.IsNullOrWhiteSpace(TxtGraph.Text) && _selectedNamedGraphs is { Count: > 0 })
+                    ? TxtGraph.Text?.Trim() ?? string.Empty : null)
                 : protectedState.Graph;
             var expectedUiGraph = protectedState is null
-                ? (ChkUiGraph.IsChecked == true ? TxtUiGraph.Text?.Trim() ?? string.Empty : null)
+                ? (ChkUiGraph.IsEnabled && ChkUiGraph.IsChecked == true ? TxtUiGraph.Text?.Trim() ?? string.Empty : null)
                 : protectedState.UiGraph;
+            var expectedNamedGraphs = protectedState is null
+                ? (ChkGraph.IsChecked == true ? _selectedNamedGraphs : null) : protectedState.NamedGraphs;
             var verificationError = VmdlPipeline.VerifyCompiledAg2References(
                 compiledPath,
-                expectedSkel, expectedGraph, expectedUiGraph);
+                expectedSkel, expectedGraph, expectedUiGraph, expectedNamedGraphs);
             if (verificationError != null)
             {
                 await DialogService.ShowErrorAsync(this, "compiled model missing AG2 references", verificationError);
@@ -1021,9 +1061,10 @@ public partial class MainWindow : Window
                 uiGraphPath: TxtUiGraph.Text?.Trim(),
                 addSkel: ChkSkel.IsChecked == true,
                 addGraph: ChkGraph.IsChecked == true,
-                addUiGraph: ChkUiGraph.IsChecked == true,
+                addUiGraph: ChkUiGraph.IsEnabled && ChkUiGraph.IsChecked == true,
                 cswinDir: csWinDir,
-                citadelAddonsDir: citadelDir
+                citadelAddonsDir: citadelDir,
+                namedGraphs: _selectedNamedGraphs
             );
 
             Log(msg);
@@ -1070,10 +1111,12 @@ public partial class MainWindow : Window
         var requestedUiGraph = TxtUiGraph.Text?.Trim();
         var addSkel = ChkSkel.IsChecked == true;
         var addGraph = ChkGraph.IsChecked == true;
-        var addUiGraph = ChkUiGraph.IsChecked == true;
+        var addUiGraph = ChkUiGraph.IsEnabled && ChkUiGraph.IsChecked == true;
+        var namedGraphs = addGraph ? _selectedNamedGraphs : null;
         var (defaultSkel, defaultGraph, defaultUiGraph) = VmdlPipeline.DeriveDefaultPaths(targetPath);
         var expectedSkel = addSkel ? (string.IsNullOrWhiteSpace(requestedSkel) ? defaultSkel : requestedSkel) : null;
-        var expectedGraph = addGraph ? (string.IsNullOrWhiteSpace(requestedGraph) ? defaultGraph : requestedGraph) : null;
+        var expectedGraph = addGraph ? (string.IsNullOrWhiteSpace(requestedGraph)
+            ? (namedGraphs is { Count: > 0 } ? null : defaultGraph) : requestedGraph) : null;
         var expectedUiGraph = addUiGraph ? (string.IsNullOrWhiteSpace(requestedUiGraph) ? defaultUiGraph : requestedUiGraph) : null;
 
         try
@@ -1118,6 +1161,7 @@ public partial class MainWindow : Window
                 citadelAddonsDir: citadelDir,
                 disableAnimationList: ChkDisableAnimList.IsChecked == true,
                 autoDetectAnims: ChkAutoDetectAnims.IsChecked == true,
+                namedGraphs: namedGraphs,
                 progress: progress,
                 onLog: Log,
                 beforeDeploy: ReleaseProtectionForOutput,
@@ -1125,7 +1169,7 @@ public partial class MainWindow : Window
                 {
                     var protection = CompiledModelProtection.Acquire(deployedPath, compilerOutputPath);
                     _protectedModels[targetPath] = new ProtectedModelState(
-                        protection, expectedSkel, expectedGraph, expectedUiGraph);
+                        protection, expectedSkel, expectedGraph, expectedUiGraph, namedGraphs);
                     UpdateProtectionStatus();
                     Log($"[protect] CSDK12 cannot overwrite {Path.GetFileName(deployedPath)} until packaging or refusal.");
                 }

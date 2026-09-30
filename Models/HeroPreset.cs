@@ -1,4 +1,6 @@
 using System.Text.Json.Serialization;
+using System;
+using System.Collections.Generic;
 
 namespace DeadlockVmdlCompiler.Models;
 
@@ -12,4 +14,7 @@ public class HeroPreset
 
     [JsonPropertyName("ui_graph")]
     public string UiGraph { get; set; } = string.Empty;
+
+    [JsonPropertyName("named_graphs")]
+    public Dictionary<string, string> NamedGraphs { get; set; } = new(StringComparer.OrdinalIgnoreCase);
 }

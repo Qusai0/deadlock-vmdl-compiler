@@ -138,7 +138,8 @@ internal static class ModelDocAg2Editor
 
     public static (string Content, List<string> Changes) Upgrade(
         string content, string skelPath, string graphPath, string? uiGraphPath,
-        bool addSkel, bool addGraph, bool addUiGraph, bool upgradeHeader, string header)
+        bool addSkel, bool addGraph, bool addUiGraph, bool upgradeHeader, string header,
+        IReadOnlyDictionary<string, string>? namedGraphs = null)
     {
         var changes = new List<string>();
         if (upgradeHeader)
@@ -153,8 +154,14 @@ internal static class ModelDocAg2Editor
             }
         }
 
+        var extraGraphs = addGraph ? namedGraphs : null;
+        var addDefaultGraph = addGraph && !string.IsNullOrWhiteSpace(graphPath);
         if ((addSkel && !ValidPath(skelPath)) ||
-            (addGraph && !ValidPath(graphPath)) ||
+            (addGraph && !addDefaultGraph && extraGraphs is not { Count: > 0 }) ||
+            (addDefaultGraph && !ValidPath(graphPath)) ||
+            (extraGraphs?.Any(pair => !ValidPath(pair.Key) || !ValidPath(pair.Value) ||
+                pair.Key.Equals("ui", StringComparison.OrdinalIgnoreCase) ||
+                pair.Key.Equals("default", StringComparison.OrdinalIgnoreCase)) == true) ||
             (addUiGraph && !ValidPath(uiGraphPath)))
         {
             changes.Add("Error: Selected AG2 reference path is empty or invalid; select a hero preset.");
@@ -207,7 +214,7 @@ internal static class ModelDocAg2Editor
             }
         }
 
-        if (addGraph || addUiGraph)
+        if (addDefaultGraph || addUiGraph || extraGraphs is { Count: > 0 })
         {
             if (!TryGetRootChildren(content, out rootOpen, out rootClose))
             {
@@ -226,8 +233,10 @@ internal static class ModelDocAg2Editor
             if (list is null)
             {
                 var children = new List<string>();
-                if (addGraph) children.Add(ReferenceNode("DefaultAnimGraph2", graphPath));
+                if (addDefaultGraph) children.Add(ReferenceNode("DefaultAnimGraph2", graphPath));
                 if (addUiGraph) children.Add(ReferenceNode("AnimGraph2", uiGraphPath!, "ui"));
+                if (extraGraphs != null)
+                    children.AddRange(extraGraphs.Select(pair => ReferenceNode("AnimGraph2", pair.Value, pair.Key)));
                 content = InsertIntoArray(content, rootOpen, rootClose, ListNode("AnimGraph2List", children, newline), newline);
                 changes.Add("Injected AnimGraph2List node");
             }
@@ -239,7 +248,7 @@ internal static class ModelDocAg2Editor
                     return (content, changes);
                 }
 
-                if (addGraph)
+                if (addDefaultGraph)
                 {
                     var reference = FindNode(content, childOpen, childClose, "DefaultAnimGraph2");
                     if (reference is null)
@@ -275,6 +284,32 @@ internal static class ModelDocAg2Editor
                     {
                         content = SetFilename(content, reference, uiGraphPath!, newline, out var changed);
                         if (changed) changes.Add("Updated ui AnimGraph2 path");
+                    }
+                }
+                if (extraGraphs != null)
+                {
+                    foreach (var (name, path) in extraGraphs)
+                    {
+                        if (!TryGetRootChildren(content, out rootOpen, out rootClose) ||
+                            (list = FindNode(content, rootOpen, rootClose, "AnimGraph2List")) is null ||
+                            !TryGetChildren(content, list.Value, out childOpen, out childClose))
+                        {
+                            changes.Add("Error: Could not reopen AnimGraph2List after editing named graphs.");
+                            return (content, changes);
+                        }
+                        var reference = EnumerateNodes(content, childOpen, childClose).FirstOrDefault(node =>
+                            node.ClassName.Equals("AnimGraph2", StringComparison.OrdinalIgnoreCase) &&
+                            FieldValue(content, node, "name").Equals(name, StringComparison.OrdinalIgnoreCase));
+                        if (reference == default)
+                        {
+                            content = InsertIntoArray(content, childOpen, childClose, ReferenceNode("AnimGraph2", path, name), newline);
+                            changes.Add($"Injected {name} AnimGraph2 node");
+                        }
+                        else
+                        {
+                            content = SetFilename(content, reference, path, newline, out var changed);
+                            if (changed) changes.Add($"Updated {name} AnimGraph2 path");
+                        }
                     }
                 }
             }

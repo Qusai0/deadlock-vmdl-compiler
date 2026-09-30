@@ -143,10 +143,112 @@ if (!string.IsNullOrWhiteSpace(realAnimationVmdl))
     Console.WriteLine($"Real ModelDoc animation check passed ({originalClipCount} AnimFile nodes).");
 }
 
+HeroDatabase.UseBuiltInDatabase();
 var root = Path.Combine(Path.GetTempPath(), "deadlock-regression-" + Guid.NewGuid().ToString("N"));
 Directory.CreateDirectory(root);
 try
 {
+    var customList = Path.Combine(root, "my_hero_paths.json");
+    var customJson = """
+    {
+        // Custom names must appear in the preset menu, even without a known hero.
+        "my_creature": { "skel": "models/custom/creature.vnmskel", "named_graphs": { "Neutrals": "animgraphs/custom/creature.vnmgraph" }, },
+        "abrams": { "skel": "models/custom/abrams.vnmskel", "graph": "animgraphs/custom/abrams.vnmgraph" },
+    }
+    """;
+    File.WriteAllText(customList, customJson);
+    Check(HeroDatabase.LoadCustomDatabase(customList) == 2 &&
+          HeroDatabase.GetVisiblePresets().Keys.ToHashSet(StringComparer.OrdinalIgnoreCase).SetEquals(new[] { "my_creature", "abrams" }) &&
+          HeroDatabase.GetVisiblePresets()["abrams"].Skel == "models/custom/abrams.vnmskel" &&
+          HeroDatabase.GetVisiblePresets()["my_creature"].NamedGraphs["Neutrals"] == "animgraphs/custom/creature.vnmgraph" &&
+          HeroDatabase.ActiveCustomFilePath == customList && File.ReadAllText(customList) == customJson,
+        "Custom lists hide unknown names, lose overrides/bindings, add unrelated built-ins, or modify the source file.");
+    var activeCustomData = HeroDatabase.GetDatabase();
+    var badList = Path.Combine(root, "invalid_presets.json");
+    foreach (var invalidListJson in new[] { "[]", "{}", "{\"bad\":null}", "{\"bad\":{}}",
+                 "{\"bad\":{\"skel\":3}}", "{\"same\":{\"skel\":\"x\"},\"SAME\":{\"skel\":\"y\"}}",
+                 "{\"bad\":{\"named_graphs\":{\"ui\":\"x.vnmgraph\"}}}" })
+    {
+        File.WriteAllText(badList, invalidListJson);
+        var rejected = false;
+        try { HeroDatabase.LoadCustomDatabase(badList); }
+        catch (Exception ex) when (ex is JsonException or InvalidDataException) { rejected = true; }
+        Check(rejected && ReferenceEquals(HeroDatabase.GetDatabase(), activeCustomData) &&
+              HeroDatabase.ActiveCustomFilePath == customList,
+            "An invalid preset import replaced the active preset list.");
+    }
+    File.WriteAllText(customList, customJson.Replace("models/custom/creature.vnmskel", "models/custom/updated.vnmskel", StringComparison.Ordinal));
+    HeroDatabase.LoadCustomDatabase(customList);
+    Check(HeroDatabase.GetVisiblePresets()["my_creature"].Skel == "models/custom/updated.vnmskel",
+        "Loading an edited preset file reused stale cached values.");
+    var selectedFileConfig = JsonSerializer.Deserialize<AppConfig>(JsonSerializer.Serialize(new AppConfig { HeroPathsFile = customList }))!;
+    Check(selectedFileConfig.HeroPathsFile == customList, "The chosen preset file path is not persisted in config JSON.");
+    HeroDatabase.ReloadDatabase(selectedFileConfig);
+    Check(HeroDatabase.ActiveCustomFilePath == customList && HeroDatabase.GetVisiblePresets().Count == 2 &&
+          HeroDatabase.GetVisiblePresets()["my_creature"].Skel == "models/custom/updated.vnmskel",
+        "Restarting with a selected preset file did not restore the custom list.");
+    var builtInConfig = JsonSerializer.Deserialize<AppConfig>(JsonSerializer.Serialize(new AppConfig
+        { UseBuiltInHeroPaths = true, HeroPathsFile = customList }))!;
+    HeroDatabase.ReloadDatabase(builtInConfig);
+    Check(HeroDatabase.ActiveCustomFilePath == null && HeroDatabase.GetVisiblePresets()["abrams"].Skel != "models/custom/abrams.vnmskel",
+        "The saved default-list preference did not restore bundled paths after restart.");
+    HeroDatabase.UseBuiltInDatabase();
+    Check(HeroDatabase.ActiveCustomFilePath == null && HeroDatabase.GetVisiblePresets().ContainsKey("seven"),
+        "Switching back to built-in presets did not restore the default list.");
+    Console.WriteLine("Custom preset import, validation, and reload checks passed.");
+
+    var neutralGraph = new Dictionary<string, string> { ["Neutrals"] = "animgraphs/neutral_test.vnmgraph" };
+    var namedOnly = VmdlPipeline.UpgradeVmdlContent(bareModel, "models/test.vnmskel", "", "",
+        addUiGraph: false, namedGraphs: neutralGraph);
+    Check(!namedOnly.Changes.Any(change => change.StartsWith("Error:", StringComparison.Ordinal)) &&
+          namedOnly.UpgradedContent.Contains("name = \"Neutrals\"", StringComparison.Ordinal) &&
+          !namedOnly.UpgradedContent.Contains("DefaultAnimGraph2", StringComparison.Ordinal) &&
+          !namedOnly.UpgradedContent.Contains("name = \"ui\"", StringComparison.Ordinal),
+        "A named-only neutral graph was rejected, renamed to default, or given a nonexistent UI graph.");
+    var namedAgain = VmdlPipeline.UpgradeVmdlContent(namedOnly.UpgradedContent, "models/test.vnmskel", "", "",
+        addUiGraph: false, namedGraphs: neutralGraph);
+    Check(namedAgain.UpgradedContent == namedOnly.UpgradedContent, "Named graph injection is not idempotent.");
+    var namedUpdated = VmdlPipeline.UpgradeVmdlContent(namedOnly.UpgradedContent, "models/test.vnmskel", "", "",
+        addUiGraph: false, namedGraphs: new Dictionary<string, string> { ["Neutrals"] = "animgraphs/updated_neutral.vnmgraph" });
+    Check(Count(namedUpdated.UpgradedContent, "name = \"Neutrals\"") == 1 &&
+          namedUpdated.UpgradedContent.Contains("animgraphs/updated_neutral.vnmgraph", StringComparison.Ordinal),
+        "Updating a named graph duplicated its binding or left a stale path.");
+    var namedDisabled = VmdlPipeline.UpgradeVmdlContent(bareModel, "models/test.vnmskel", "", "",
+        addGraph: false, addUiGraph: false, namedGraphs: neutralGraph);
+    Check(!namedDisabled.UpgradedContent.Contains("AnimGraph2List", StringComparison.Ordinal),
+        "The graph checkbox does not disable named graph injection.");
+    var manualNeutralModel = Path.Combine(root, "abrams", "custom_neutral.vmdl");
+    Directory.CreateDirectory(Path.GetDirectoryName(manualNeutralModel)!);
+    File.WriteAllText(manualNeutralModel, bareModel);
+    var manualNeutralResult = await VmdlPipeline.ProcessVmdlFileAsync(manualNeutralModel,
+        skelPath: "models/test.vnmskel", graphPath: "", uiGraphPath: "", namedGraphs: neutralGraph,
+        addUiGraph: false, createBackup: false, compileCsWin: false, revertVmdl: false);
+    var manualNeutralContent = File.ReadAllText(manualNeutralModel);
+    Check(manualNeutralResult.Success && manualNeutralContent.Contains("name = \"Neutrals\"", StringComparison.Ordinal) &&
+          !manualNeutralContent.Contains("DefaultAnimGraph2", StringComparison.Ordinal),
+        "A named-only manual preset inherited an unrelated default graph from its model folder.");
+    Console.WriteLine("Named neutral graph preparation checks passed.");
+    using var neutralFixtureStream = System.Reflection.Assembly.GetExecutingAssembly()
+        .GetManifestResourceStream("RegressionChecks.NeutralAg2Models.json");
+    Check(neutralFixtureStream != null, "The neutral model reference fixture is missing.");
+    var neutralModels = JsonSerializer.Deserialize<Dictionary<string, string>>(neutralFixtureStream!)!;
+    var neutralPresets = HeroDatabase.GetVisiblePresets();
+    Check(neutralModels.Count == 19 && neutralPresets.Keys.Where(key => key.StartsWith("neutral_", StringComparison.Ordinal))
+              .ToHashSet(StringComparer.OrdinalIgnoreCase).SetEquals(neutralModels.Keys),
+        "The built-in list is missing an AG2 neutral model or includes a non-AG2 creep.");
+    foreach (var (key, modelPath) in neutralModels)
+    {
+        var preset = neutralPresets[key];
+        Check(preset.NamedGraphs.ContainsKey("Neutrals") && preset.UiGraph.Length == 0 &&
+              VmdlPipeline.DetectHeroFromPath("C:/addons/test/" + modelPath[..^2]) == key,
+            $"The {key} preset has an incorrect graph binding, UI graph, or automatic detection key.");
+        var preparedNeutral = VmdlPipeline.UpgradeVmdlContent(bareModel, preset.Skel, preset.Graph, preset.UiGraph,
+            addUiGraph: false, namedGraphs: preset.NamedGraphs);
+        Check(!preparedNeutral.Changes.Any(change => change.StartsWith("Error:", StringComparison.Ordinal)) &&
+              preparedNeutral.UpgradedContent.Contains("name = \"Neutrals\"", StringComparison.Ordinal),
+            $"Could not prepare the {key} AG2 preset for CSWin64.");
+    }
+
     var steamRoot = Path.Combine(root, "unusual client location");
     var secondaryLibrary = Path.Combine(root, "Другая библиотека");
     var legacyLibrary = Path.Combine(root, "legacy library");
@@ -466,6 +568,24 @@ try
                 $"The {hero.DisplayName} preset differs from the game's actual AG2 references: {newHeroError}");
         }
         Console.WriteLine("Deadlock VPK AG2 smoke check passed.");
+        foreach (var (key, modelPath) in neutralModels)
+        {
+            var preset = neutralPresets[key];
+            Check(vpkPaths.Contains(modelPath) && vpkPaths.Contains(preset.Skel + "_c") &&
+                  preset.NamedGraphs.Values.All(graph => vpkPaths.Contains(graph + "_c")) &&
+                  (preset.Graph.Length == 0 || vpkPaths.Contains(preset.Graph + "_c")),
+                $"A preset references an unavailable compiled AG2 resource for {key}.");
+            var neutralFile = Path.Combine(root, key + ".vmdl_c");
+            File.WriteAllBytes(neutralFile, VpkHeroScanner.ExtractFileFromVpk(deadlockVpk, modelPath)!);
+            var neutralError = VmdlPipeline.VerifyCompiledAg2References(neutralFile, preset.Skel,
+                preset.Graph.Length == 0 ? null : preset.Graph, null, preset.NamedGraphs);
+            Check(neutralError == null, $"The {key} preset disagrees with actual compiled AG2 bindings: {neutralError}");
+            var wrongIdentifier = VmdlPipeline.VerifyCompiledAg2References(neutralFile, null, null, null,
+                new Dictionary<string, string> { ["WrongIdentifier"] = preset.NamedGraphs["Neutrals"] });
+            Check(wrongIdentifier?.Contains("WrongIdentifier") == true,
+                $"Compiled AG2 verification accepted a graph under the wrong identifier for {key}.");
+        }
+        Console.WriteLine($"Neutral VPK AG2 references passed: {neutralModels.Count} models.");
 
         if (args.Contains("--new-hero-export"))
         {

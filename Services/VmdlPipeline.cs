@@ -48,6 +48,10 @@ public static class VmdlPipeline
         if (parts.Length == 0)
             return null;
 
+        // Variant models can share a parent folder and skeleton with the base model.
+        var filename = Path.GetFileNameWithoutExtension(filepath).ToLowerInvariant();
+        if (db.ContainsKey(filename)) return filename;
+
         // Older game folders and local databases can use names removed from the
         // curated preset menu. Resolve them to the remaining preset first.
         var renamedFolders = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
@@ -88,11 +92,6 @@ public static class VmdlPipeline
             if (versionedMatch != null)
                 return versionedMatch;
         }
-
-        // Check filename stem
-        var filename = Path.GetFileNameWithoutExtension(filepath).ToLowerInvariant();
-        if (db.ContainsKey(filename))
-            return filename;
 
         return null;
     }
@@ -197,9 +196,10 @@ public static class VmdlPipeline
         bool addSkel = true,
         bool addGraph = true,
         bool addUiGraph = true,
-        bool upgradeHeader = true)
+        bool upgradeHeader = true,
+        IReadOnlyDictionary<string, string>? namedGraphs = null)
         => ModelDocAg2Editor.Upgrade(content, skelPath, graphPath, uiGraphPath,
-            addSkel, addGraph, addUiGraph, upgradeHeader, ModelDoc41Header);
+            addSkel, addGraph, addUiGraph, upgradeHeader, ModelDoc41Header, namedGraphs);
 
     public record CompileProgress(
         int Step,
@@ -274,7 +274,8 @@ public static class VmdlPipeline
         string? expectedUiGraphPath = null,
         Action<string>? beforeDeploy = null,
         Action<string, string>? afterDeploy = null,
-        bool autoDetectAnims = true)
+        bool autoDetectAnims = true,
+        IReadOnlyDictionary<string, string>? expectedNamedGraphs = null)
     {
         var cfg = ConfigManager.LoadConfig();
         var useCsWinDir = !string.IsNullOrWhiteSpace(cswinDir) ? cswinDir : (!string.IsNullOrWhiteSpace(cfg.CsWinDir) ? cfg.CsWinDir : DefaultCsWinDir);
@@ -445,7 +446,7 @@ public static class VmdlPipeline
         }
 
         var verificationError = VerifyCompiledAg2References(csWinCompiledVmdlc,
-            expectedSkelPath, expectedGraphPath, expectedUiGraphPath);
+            expectedSkelPath, expectedGraphPath, expectedUiGraphPath, expectedNamedGraphs);
         if (verificationError != null)
             return (false, verificationError);
 
@@ -484,9 +485,11 @@ public static class VmdlPipeline
     }
 
     public static string? VerifyCompiledAg2References(
-        string compiledPath, string? expectedSkelPath, string? expectedGraphPath, string? expectedUiGraphPath)
+        string compiledPath, string? expectedSkelPath, string? expectedGraphPath, string? expectedUiGraphPath,
+        IReadOnlyDictionary<string, string>? expectedNamedGraphs = null)
     {
-        if (expectedSkelPath == null && expectedGraphPath == null && expectedUiGraphPath == null)
+        if (expectedSkelPath == null && expectedGraphPath == null && expectedUiGraphPath == null &&
+            expectedNamedGraphs is not { Count: > 0 })
             return null;
         if ((expectedSkelPath != null && string.IsNullOrWhiteSpace(expectedSkelPath)) ||
             (expectedGraphPath != null && string.IsNullOrWhiteSpace(expectedGraphPath)) ||
@@ -519,6 +522,14 @@ public static class VmdlPipeline
                                  item.Value.Contains(expectedUiGraphPath.Replace('\\', '/'), StringComparison.OrdinalIgnoreCase));
                 if (!uiFound) missing.Add($"ui AnimGraph2 ({expectedUiGraphPath})");
             }
+            if (expectedNamedGraphs != null)
+                foreach (var (name, graph) in expectedNamedGraphs)
+                {
+                    var found = Regex.Matches(data, @"\{[\s\S]*?\}")
+                        .Any(item => Regex.IsMatch(item.Value, @"\bm_sIdentifier\s*=\s*""" + Regex.Escape(name) + @"""", RegexOptions.IgnoreCase) &&
+                                     item.Value.Contains(graph.Replace('\\', '/'), StringComparison.OrdinalIgnoreCase));
+                    if (!found) missing.Add($"{name} AnimGraph2 ({graph})");
+                }
 
             return missing.Count == 0 ? null :
                 $"Compiled model is missing AG2 references: {string.Join(", ", missing)}. The model was not deployed.";
@@ -566,7 +577,8 @@ public static class VmdlPipeline
         Action<string>? onLog = null,
         Action<string>? beforeDeploy = null,
         Action<string, string>? afterDeploy = null,
-        bool autoDetectAnims = true)
+        bool autoDetectAnims = true,
+        IReadOnlyDictionary<string, string>? namedGraphs = null)
     {
         filepath = Path.GetFullPath(filepath);
         if (!File.Exists(filepath))
@@ -576,8 +588,10 @@ public static class VmdlPipeline
 
         var (defSkel, defGraph, defUiGraph) = DeriveDefaultPaths(filepath);
         var useSkel = !string.IsNullOrWhiteSpace(skelPath) ? skelPath : defSkel;
-        var useGraph = !string.IsNullOrWhiteSpace(graphPath) ? graphPath : defGraph;
+        var useGraph = !string.IsNullOrWhiteSpace(graphPath) ? graphPath :
+            (namedGraphs is { Count: > 0 } ? string.Empty : defGraph);
         var useUiGraph = !string.IsNullOrWhiteSpace(uiGraphPath) ? uiGraphPath : defUiGraph;
+        var useNamedGraphs = addGraph ? namedGraphs : null;
 
         var origContent = await File.ReadAllTextAsync(filepath);
 
@@ -589,7 +603,8 @@ public static class VmdlPipeline
             addSkel: addSkel,
             addGraph: addGraph,
             addUiGraph: addUiGraph,
-            upgradeHeader: upgradeHeader
+            upgradeHeader: upgradeHeader,
+            namedGraphs: useNamedGraphs
         );
 
         var upgradeError = changes.FirstOrDefault(change => change.StartsWith("Error:", StringComparison.Ordinal));
@@ -621,8 +636,9 @@ public static class VmdlPipeline
                 progress: progress,
                 onLog: onLog,
                 expectedSkelPath: addSkel ? useSkel : null,
-                expectedGraphPath: addGraph ? useGraph : null,
+                expectedGraphPath: addGraph && !(string.IsNullOrWhiteSpace(useGraph) && useNamedGraphs is { Count: > 0 }) ? useGraph : null,
                 expectedUiGraphPath: addUiGraph ? useUiGraph : null,
+                expectedNamedGraphs: useNamedGraphs,
                 beforeDeploy: beforeDeploy,
                 afterDeploy: afterDeploy
             );
@@ -662,7 +678,8 @@ public static class VmdlPipeline
         bool addGraph = true,
         bool addUiGraph = true,
         string? cswinDir = null,
-        string? citadelAddonsDir = null)
+        string? citadelAddonsDir = null,
+        IReadOnlyDictionary<string, string>? namedGraphs = null)
     {
         filepath = Path.GetFullPath(filepath);
         if (!File.Exists(filepath))
@@ -679,7 +696,8 @@ public static class VmdlPipeline
 
         var (defSkel, defGraph, defUiGraph) = DeriveDefaultPaths(filepath);
         var useSkel = !string.IsNullOrWhiteSpace(skelPath) ? skelPath : defSkel;
-        var useGraph = !string.IsNullOrWhiteSpace(graphPath) ? graphPath : defGraph;
+        var useGraph = !string.IsNullOrWhiteSpace(graphPath) ? graphPath :
+            (namedGraphs is { Count: > 0 } ? string.Empty : defGraph);
         var useUiGraph = !string.IsNullOrWhiteSpace(uiGraphPath) ? uiGraphPath : defUiGraph;
 
         var origContent = await File.ReadAllTextAsync(filepath);
@@ -692,7 +710,8 @@ public static class VmdlPipeline
             addSkel: addSkel,
             addGraph: addGraph,
             addUiGraph: addUiGraph,
-            upgradeHeader: true
+            upgradeHeader: true,
+            namedGraphs: namedGraphs
         );
 
         var upgradeError = changes.FirstOrDefault(change => change.StartsWith("Error:", StringComparison.Ordinal));

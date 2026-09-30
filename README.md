@@ -28,6 +28,7 @@ Deadlock uses AnimGraph 2 (AG2) animation structures. Standard CSDK12 tooling ca
 - **discovered addon**: Auto-detects and lists all available addons in your content folder.
 - **target vmdl file**: Selects the target .vmdl model file inside the selected addon.
 - **hero preset**: Auto-detects or selects the hero archetype to assign corresponding skeleton and AnimGraph paths.
+- **neutral presets**: The built-in list includes 19 neutral model variants with verified AG2 skeletons and `Neutrals` graph bindings. NPCs without those AG2 resources are excluded. Named graphs are injected with their original identifiers, and a missing UI graph is automatically skipped.
 
 ### Pipeline Actions
 - **compile**: Runs the full automated compilation pipeline (injects AG2 references, compiles via CSWin64 ModelDoc, verifies the AG2 references in the compiled .vmdl_c before deployment, copies it to the addon game directory, and leaves the CSDK .vmdl unchanged when revert is enabled (otherwise it saves the injected version).
@@ -41,7 +42,7 @@ Deadlock uses AnimGraph 2 (AG2) animation structures. Standard CSDK12 tooling ca
 - **cswin64 installation**: Select the CSWin64 installation root that contains `game/bin/win64/resourcecompiler.exe` (or `bin/win64/resourcecompiler.exe`), not the `bin` directory itself.
 - **csdk addons folder**: Path to your Deadlock content/citadel_addons directory.
 - **inject nmskeleton**: Injects compiled vanilla .vnmskel reference before compiling.
-- **inject defaultanimgraph2**: Injects compiled hero .vnmgraph reference before compiling.
+- **inject animgraph2 (default & named)**: Injects the compiled default graph and any named graph bindings supplied by the preset.
 - **inject ui animgraph2**: Injects compiled hero UI .vnmgraph reference before compiling.
 - **disable animationlist**: Forces the entire AnimationList off during compile. This manual override takes priority over automatic detection. Uncheck to preserve animations.
 - **auto-detect animations**: Keeps available animation sources active and disables only missing clips in the temporary CSWin64 model. Existing per-clip mute flags are preserved. Sources are resolved at their authored paths, including model-relative paths; referenced animations outside the model folder are copied to the matching CSWin64 addon paths. Turn this option off to compile all configured clips without automatic filtering. Both settings are saved, including settings from older versions.
@@ -49,6 +50,25 @@ Deadlock uses AnimGraph 2 (AG2) animation structures. Standard CSDK12 tooling ca
 ### Visuals
 - **3D preview**: Interactive real-time 3D viewport with mesh rendering and camera controls.
 - **log console**: Real-time output log tracking all compiler steps and status.
+
+### Custom preset format
+
+Use the existing `skel`, `graph`, and `ui_graph` fields for hero presets. A preset can also supply `named_graphs`, preserving graph identifiers used by NPCs. For example:
+
+```json
+{
+  "my_mushroom": {
+    "skel": "models/npc_units/neutral_mushroom_small_01/neutral_mushroom_small_01.vnmskel",
+    "graph": "",
+    "ui_graph": "",
+    "named_graphs": {
+      "Neutrals": "animgraphs/animgraph2/npc_units/neutrals/npc_neutral.vnmgraph+mushroom_small.vnmgraph"
+    }
+  }
+}
+```
+
+JSON comments and trailing commas are accepted. Optional JSON files beside the EXE are preserved by `publish.ps1`; the application itself remains a single self-contained executable.
 
 ---
 

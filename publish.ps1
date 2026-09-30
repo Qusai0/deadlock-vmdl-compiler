@@ -23,7 +23,7 @@ try {
     New-Item -ItemType Directory -Path $publishDir -Force | Out-Null
     # Preserve legacy portable settings while keeping publish a single EXE.
     $userDataDir = Join-Path ([Environment]::GetFolderPath('LocalApplicationData')) 'DeadlockVmdlCompiler'
-    foreach ($name in @('config.json', 'hero_paths.json')) {
+    foreach ($name in @('config.json')) {
         $legacy = Join-Path $publishDir $name
         if (-not (Test-Path -LiteralPath $legacy -PathType Leaf)) { continue }
         $saved = Join-Path $userDataDir $name
@@ -110,7 +110,8 @@ try {
         }
     }
 
-    $publishedFiles = @(Get-ChildItem -LiteralPath $publishDir -Force)
+    # User-supplied JSON lists beside the EXE are optional data, not build sidecars.
+    $publishedFiles = @(Get-ChildItem -LiteralPath $publishDir -Force | Where-Object { $_.Name -notlike '*.json' })
     if ($publishedFiles.Count -ne 1 -or $publishedFiles[0].Name -ne 'DeadlockVmdlCompiler.exe') {
         throw "Unexpected files in publish: $($publishedFiles.Name -join ', ')."
     }

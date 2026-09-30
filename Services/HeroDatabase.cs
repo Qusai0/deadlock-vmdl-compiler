@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.IO;
 using System.Reflection;
 using System.Text.Json;
+using System.Linq;
 using DeadlockVmdlCompiler.Models;
 
 namespace DeadlockVmdlCompiler.Services;
@@ -10,6 +11,78 @@ namespace DeadlockVmdlCompiler.Services;
 public static class HeroDatabase
 {
     private static Dictionary<string, HeroPreset>? _database;
+    public static string? ActiveCustomFilePath { get; private set; }
+    public static string? CustomLoadError { get; private set; }
+
+    public static int LoadCustomDatabase(string path)
+    {
+        var fullPath = Path.GetFullPath(path);
+        var data = ReadPresetFile(fullPath);
+        // Validate the complete file before replacing the active list.
+        _database = data;
+        ActiveCustomFilePath = fullPath;
+        CustomLoadError = null;
+        return data.Count;
+    }
+
+    public static void UseBuiltInDatabase()
+    {
+        _database = LoadBuiltInDatabase();
+        ActiveCustomFilePath = null;
+        CustomLoadError = null;
+    }
+
+    public static Dictionary<string, HeroPreset> ReadPresetFile(string path)
+    {
+        using var document = JsonDocument.Parse(File.ReadAllText(path), new JsonDocumentOptions
+        {
+            AllowTrailingCommas = true,
+            CommentHandling = JsonCommentHandling.Skip
+        });
+        if (document.RootElement.ValueKind != JsonValueKind.Object)
+            throw new InvalidDataException("Expected a JSON object containing named presets.");
+        var data = new Dictionary<string, HeroPreset>(StringComparer.OrdinalIgnoreCase);
+        var options = new JsonSerializerOptions
+        {
+            PropertyNameCaseInsensitive = true,
+            AllowTrailingCommas = true,
+            ReadCommentHandling = JsonCommentHandling.Skip
+        };
+        foreach (var entry in document.RootElement.EnumerateObject())
+        {
+            if (string.IsNullOrWhiteSpace(entry.Name) || entry.Value.ValueKind != JsonValueKind.Object)
+                throw new InvalidDataException($"Preset '{entry.Name}' must be a named object.");
+            var preset = entry.Value.Deserialize<HeroPreset>(options)!;
+            preset.Skel = ValidateReference(preset.Skel, entry.Name, "skel");
+            preset.Graph = ValidateReference(preset.Graph, entry.Name, "graph");
+            preset.UiGraph = ValidateReference(preset.UiGraph, entry.Name, "ui_graph");
+            var namedGraphs = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+            foreach (var (name, graph) in preset.NamedGraphs ?? new())
+            {
+                if (string.IsNullOrWhiteSpace(name) || name.Equals("ui", StringComparison.OrdinalIgnoreCase) ||
+                    name.Equals("default", StringComparison.OrdinalIgnoreCase) || name.Any(c => c == '"' || char.IsControl(c)))
+                    throw new InvalidDataException($"Preset '{entry.Name}' has an invalid named graph identifier. Use graph/ui_graph for default and UI bindings.");
+                var reference = ValidateReference(graph, entry.Name, $"named_graphs.{name}");
+                if (reference.Length == 0 || !namedGraphs.TryAdd(name, reference))
+                    throw new InvalidDataException($"Preset '{entry.Name}' has an empty or duplicate named graph '{name}'.");
+            }
+            preset.NamedGraphs = namedGraphs;
+            if (preset.Skel.Length == 0 && preset.Graph.Length == 0 && preset.UiGraph.Length == 0 && namedGraphs.Count == 0)
+                throw new InvalidDataException($"Preset '{entry.Name}' does not contain any AG2 paths.");
+            if (!data.TryAdd(entry.Name, preset))
+                throw new InvalidDataException($"Duplicate preset name '{entry.Name}'. Names are case-insensitive.");
+        }
+        if (data.Count == 0) throw new InvalidDataException("The preset list is empty.");
+        return data;
+    }
+
+    private static string ValidateReference(string? path, string preset, string field)
+    {
+        var reference = path?.Trim().Replace('\\', '/') ?? string.Empty;
+        if (reference.Any(c => c == '"' || char.IsControl(c)))
+            throw new InvalidDataException($"Preset '{preset}' has an invalid {field} path.");
+        return reference;
+    }
 
     private static string GetUserDatabasePath() => Path.Combine(
         Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
@@ -26,11 +99,12 @@ public static class HeroDatabase
 
     public static IReadOnlyDictionary<string, HeroPreset> GetVisiblePresets()
     {
+        var current = GetDatabase();
+        if (ActiveCustomFilePath != null) return current;
         var builtIn = LoadBuiltInDatabase();
         if (builtIn.Count == 0)
             return GetDatabase();
 
-        var current = GetDatabase();
         var visible = new Dictionary<string, HeroPreset>(StringComparer.OrdinalIgnoreCase);
         foreach (var (key, defaultPreset) in builtIn)
             visible[key] = current.TryGetValue(key, out var updated) && updated != null
@@ -39,8 +113,26 @@ public static class HeroDatabase
         return visible;
     }
 
-    private static Dictionary<string, HeroPreset> LoadDatabase()
+    private static Dictionary<string, HeroPreset> LoadDatabase(AppConfig? config = null)
     {
+        ActiveCustomFilePath = null;
+        CustomLoadError = null;
+        config ??= ConfigManager.LoadConfig();
+        if (config.UseBuiltInHeroPaths) return LoadBuiltInDatabase();
+        var selectedFile = config.HeroPathsFile;
+        if (!string.IsNullOrWhiteSpace(selectedFile))
+        {
+            try
+            {
+                var data = ReadPresetFile(selectedFile);
+                ActiveCustomFilePath = Path.GetFullPath(selectedFile);
+                return data;
+            }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or JsonException or ArgumentException or NotSupportedException)
+            {
+                CustomLoadError = $"Could not load selected hero_paths.json: {ex.Message}";
+            }
+        }
         var exeDir = AppDomain.CurrentDomain.BaseDirectory;
         var candidates = new[]
         {
@@ -56,16 +148,9 @@ public static class HeroDatabase
             {
                 try
                 {
-                    var json = File.ReadAllText(p);
-                    var data = JsonSerializer.Deserialize<Dictionary<string, HeroPreset>>(json);
-                    if (data != null)
-                    {
-                        var dict = new Dictionary<string, HeroPreset>(StringComparer.OrdinalIgnoreCase);
-                        foreach (var kv in data)
-                            dict[kv.Key] = kv.Value;
-                        CorrectLegacyPresets(dict);
-                        return IncludeMissingBuiltInPresets(dict);
-                    }
+                    var dict = ReadPresetFile(p);
+                    CorrectLegacyPresets(dict);
+                    return IncludeMissingBuiltInPresets(dict);
                 }
                 catch { }
             }
@@ -124,9 +209,9 @@ public static class HeroDatabase
         return targetFile;
     }
 
-    public static void ReloadDatabase()
+    public static void ReloadDatabase(AppConfig? config = null)
     {
-        _database = LoadDatabase();
+        _database = LoadDatabase(config);
     }
 
     private static void CorrectLegacyPresets(Dictionary<string, HeroPreset> data)

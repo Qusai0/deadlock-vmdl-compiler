@@ -7,11 +7,12 @@ public sealed class HeroPresetChoice : INotifyPropertyChanged
 {
     private Bitmap? _portrait;
 
-    public HeroPresetChoice(string key, DeadlockHeroModel? hero = null, bool isAuto = false)
+    public HeroPresetChoice(string key, DeadlockHeroModel? hero = null, bool isAuto = false, string? detail = null)
     {
         Key = key;
         Hero = hero;
         IsAuto = isAuto;
+        _detail = detail;
     }
 
     public event PropertyChangedEventHandler? PropertyChanged;
@@ -20,7 +21,8 @@ public sealed class HeroPresetChoice : INotifyPropertyChanged
     public DeadlockHeroModel? Hero { get; }
     public bool IsAuto { get; }
     public string DisplayName => IsAuto ? "auto-detect hero paths" : Hero?.DisplayName ?? Key;
-    public string Detail => IsAuto ? "from selected model" : Hero != null ? Key : "unknown preset";
+    private readonly string? _detail;
+    public string Detail => IsAuto ? "from selected model" : Hero != null ? Key : _detail ?? "custom / unknown preset";
     public string FallbackGlyph => IsAuto ? "A" : "?";
     public bool HasPortrait => _portrait != null;
     public bool ShowFallback => _portrait == null;
