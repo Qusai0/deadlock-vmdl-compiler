@@ -9,18 +9,11 @@ namespace DeadlockVmdlCompiler.Services;
 
 public static class ClothPhysicsExtractor
 {
-    private static readonly string[] CommonSteamDeadlockPaths = new[]
-    {
-        @"D:\Games\Steam\steamapps\common\Deadlock\game\citadel\pak01_dir.vpk",
-        @"D:\SteamLibrary\steamapps\common\Deadlock\game\citadel\pak01_dir.vpk",
-        @"C:\Program Files (x86)\Steam\steamapps\common\Deadlock\game\citadel\pak01_dir.vpk",
-        @"C:\SteamLibrary\steamapps\common\Deadlock\game\citadel\pak01_dir.vpk",
-        @"E:\Games\Steam\steamapps\common\Deadlock\game\citadel\pak01_dir.vpk",
-        @"E:\SteamLibrary\steamapps\common\Deadlock\game\citadel\pak01_dir.vpk"
-    };
-
     public static string? FindDeadlockVpkPath(string? citadelAddonsDir = null)
     {
+        var installation = DeadlockLocator.DetectDeadlockInstallation();
+        if (installation.IsValid) return installation.Pak01VpkPath;
+
         if (!string.IsNullOrWhiteSpace(citadelAddonsDir) && Directory.Exists(citadelAddonsDir))
         {
             var parent = Directory.GetParent(citadelAddonsDir)?.FullName;
@@ -40,19 +33,6 @@ public static class ClothPhysicsExtractor
                 if (File.Exists(candidate)) return candidate;
             }
         }
-
-        foreach (var p in CommonSteamDeadlockPaths)
-        {
-            if (File.Exists(p)) return p;
-        }
-
-        try
-        {
-            var loc = DeadlockLocator.DetectDeadlockInstallation();
-            if (loc.IsValid && File.Exists(loc.Pak01VpkPath))
-                return loc.Pak01VpkPath;
-        }
-        catch { }
 
         return null;
     }

@@ -9,6 +9,19 @@ static void Check(bool condition, string message)
     if (!condition) throw new Exception(message);
 }
 
+static void CreateSteamInstallation(string directory)
+{
+    Directory.CreateDirectory(Path.Combine(directory, "game", "bin", "win64"));
+    Directory.CreateDirectory(Path.Combine(directory, "game", "citadel"));
+    File.WriteAllText(Path.Combine(directory, "game", "bin", "win64", "deadlock.exe"), "fixture");
+    File.WriteAllText(Path.Combine(directory, "game", "citadel", "pak01_dir.vpk"), "fixture");
+}
+
+static string SteamManifest(string installDir, string appId = "1422450") =>
+    $"\"AppState\" {{ \"appid\" \"{appId}\" // installdir is defined below\n \"installdir\" \"{installDir}\" }}";
+
+static string VdfPath(string path) => path.Replace("\\", "\\\\");
+
 static bool IsWriteBlocked(Action write)
 {
     try
@@ -134,6 +147,62 @@ var root = Path.Combine(Path.GetTempPath(), "deadlock-regression-" + Guid.NewGui
 Directory.CreateDirectory(root);
 try
 {
+    var steamRoot = Path.Combine(root, "unusual client location");
+    var secondaryLibrary = Path.Combine(root, "Другая библиотека");
+    var legacyLibrary = Path.Combine(root, "legacy library");
+    foreach (var library in new[] { steamRoot, secondaryLibrary, legacyLibrary })
+        Directory.CreateDirectory(Path.Combine(library, "steamapps"));
+    Directory.CreateDirectory(Path.Combine(steamRoot, "config"));
+    var renamedGame = Path.Combine(secondaryLibrary, "steamapps", "common", "custom game folder");
+    var legacyGame = Path.Combine(legacyLibrary, "steamapps", "common", "game");
+    CreateSteamInstallation(renamedGame);
+    CreateSteamInstallation(legacyGame);
+    CreateSteamInstallation(Path.Combine(steamRoot, "steamapps", "common", "Deadlock"));
+    var primaryManifest = Path.Combine(steamRoot, "steamapps", "appmanifest_1422450.acf");
+    var secondaryManifest = Path.Combine(secondaryLibrary, "steamapps", "appmanifest_1422450.acf");
+    var legacyManifest = Path.Combine(legacyLibrary, "steamapps", "appmanifest_1422450.acf");
+    File.WriteAllText(primaryManifest, SteamManifest("no longer installed"));
+    File.WriteAllText(secondaryManifest, SteamManifest("custom game folder"));
+    File.WriteAllText(legacyManifest, SteamManifest("game"));
+    File.WriteAllText(Path.Combine(steamRoot, "steamapps", "libraryfolders.vdf"),
+        $"\"libraryfolders\" {{ \"0\" {{ \"path\" \"{VdfPath(steamRoot)}\" }} " +
+        $"\"1\" {{ \"path\" \"{VdfPath(secondaryLibrary)}\" \"apps\" {{ }} }} " +
+        $"\"2\" {{ \"path\" \"{VdfPath(secondaryLibrary)}\" }} " +
+        "// \"path\" \"Z:\\\\ignored comment\"\n }");
+    File.WriteAllText(Path.Combine(steamRoot, "config", "libraryfolders.vdf"),
+        $"\"LibraryFolders\" {{ \"TimeNextStatsReport\" \"0\" \"1\" \"{VdfPath(legacyLibrary)}\" }}");
+    var steamLibraries = DeadlockLocator.GetSteamLibraryFolders(new[] { steamRoot });
+    Check(steamLibraries.Count == 3 && steamLibraries.Contains(secondaryLibrary) && steamLibraries.Contains(legacyLibrary),
+        "Steam libraries were not discovered from modern and legacy VDF metadata with escaped paths.");
+    var detectedFixture = DeadlockLocator.DetectFromSteamLibraries(steamLibraries);
+    Check(detectedFixture.GameRootPath == renamedGame,
+        "Steam detection guessed a folder name or failed to use installdir from the secondary library manifest.");
+    Check(DeadlockLocator.ValidateAndExtractInfo(Path.Combine(renamedGame, "game", "citadel", "pak01_dir.vpk")).GameRootPath == renamedGame,
+        "An explicit game VPK hint was not normalized to the installation root.");
+    File.WriteAllText(primaryManifest, "\"AppState\" { \"appid\"");
+    File.WriteAllText(secondaryManifest, SteamManifest("custom game folder", "730"));
+    Check(DeadlockLocator.DetectFromSteamLibraries(steamLibraries).GameRootPath == legacyGame,
+        "Malformed or wrong-app manifests prevented detection, or an installdir named game was misnormalized.");
+    var outsideGame = Path.Combine(secondaryLibrary, "outside");
+    CreateSteamInstallation(outsideGame);
+    File.WriteAllText(secondaryManifest, SteamManifest("../../outside"));
+    File.Delete(legacyManifest);
+    Check(!DeadlockLocator.DetectFromSteamLibraries(steamLibraries).IsValid,
+        "Steam detection accepted a path outside common or guessed an installation without a valid app manifest.");
+    File.WriteAllText(Path.Combine(steamRoot, "steamapps", "libraryfolders.vdf"), "\"libraryfolders\" {");
+    File.WriteAllText(primaryManifest, SteamManifest("Deadlock"));
+    Check(DeadlockLocator.DetectFromSteamLibraries(DeadlockLocator.GetSteamLibraryFolders(new[] { steamRoot })).IsValid,
+        "A damaged library list prevented detection in the primary Steam library.");
+    Console.WriteLine("Steam library and app manifest detection checks passed.");
+    if (args.Contains("--steam-detection"))
+    {
+        var installedGame = DeadlockLocator.DetectDeadlockInstallation();
+        Check(installedGame.IsValid, "The real Steam installation was not found through its library list and app manifest.");
+        Check(ClothPhysicsExtractor.FindDeadlockVpkPath() == installedGame.Pak01VpkPath,
+            "Cloth extraction resolved a different game archive than the Steam locator.");
+        Console.WriteLine($"Live Steam detection passed: {installedGame.GameRootPath}");
+    }
+
     var animationRoot = Path.Combine(root, "animation_sources");
     var animationDirectory = Path.Combine(animationRoot, "models", "demo");
     var winRoot = Path.Combine(root, "cswin_animation_sources");

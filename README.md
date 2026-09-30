@@ -37,6 +37,7 @@ Deadlock uses AnimGraph 2 (AG2) animation structures. Standard CSDK12 tooling ca
 - **export to cswin64**: Copies the prepared source files directly to the CSWin64 workspace for manual inspection.
 
 ### Environment Paths & Options
+- **Deadlock installation**: Detected through Steam's registry/client location, `libraryfolders.vdf`, and `appmanifest_1422450.acf`. The manifest's `installdir` determines the game folder in each Steam library; no fixed drive paths or game folder names are required. If Steam metadata is unavailable, addon creation still offers manual VPK selection.
 - **cswin64 installation**: Select the CSWin64 installation root that contains `game/bin/win64/resourcecompiler.exe` (or `bin/win64/resourcecompiler.exe`), not the `bin` directory itself.
 - **csdk addons folder**: Path to your Deadlock content/citadel_addons directory.
 - **inject nmskeleton**: Injects compiled vanilla .vnmskel reference before compiling.
@@ -84,6 +85,8 @@ dotnet run --project tests/RegressionChecks/RegressionChecks.csproj -c Release
 ```
 
 Set `DEADLOCK_TEST_VPK` to the path of a real `pak01_dir.vpk` before running the regression command to enable the optional VPK smoke check. The default regression checks run without it.
+
+Pass `--steam-detection` to also verify discovery against the local Steam installation. The default checks cover modern and legacy library lists, renamed game directories, stale installations, and malformed manifests using temporary fixtures.
 Pass `--new-hero-export` to additionally export and validate all six September 2026 heroes in temporary addon directories. Pass `--addon-export` to check Wraith's model and cloth export.
 
 ---

@@ -1,5 +1,11 @@
 # Changelog
 
+## 1.3.6
+
+- Locate Deadlock using Steam's `libraryfolders.vdf` and `appmanifest_1422450.acf`, taking the game folder from `installdir`. Removed fixed drive paths and game folder name guesses.
+- Support modern and legacy library lists, both Windows registry views, custom library locations, and damaged or stale metadata in other libraries.
+- Use the same Steam discovery for cloth resources. Keep explicit path hints and manual VPK selection available.
+
 ## 1.3.5
 
 - Combined Qusai0's automatic animation detection with the manual AnimationList override. Fixed disabled parent lists, unintended clip unmuting, and incorrect matches based only on file names.
