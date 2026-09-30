@@ -21,6 +21,29 @@ try {
     }
 
     New-Item -ItemType Directory -Path $publishDir -Force | Out-Null
+    # Preserve legacy portable settings while keeping publish a single EXE.
+    $userDataDir = Join-Path ([Environment]::GetFolderPath('LocalApplicationData')) 'DeadlockVmdlCompiler'
+    foreach ($name in @('config.json', 'hero_paths.json')) {
+        $legacy = Join-Path $publishDir $name
+        if (-not (Test-Path -LiteralPath $legacy -PathType Leaf)) { continue }
+        $saved = Join-Path $userDataDir $name
+        if (-not (Test-Path -LiteralPath $saved)) {
+            $null = Get-Content -LiteralPath $legacy -Raw | ConvertFrom-Json
+            New-Item -ItemType Directory -Path $userDataDir -Force | Out-Null
+            Copy-Item -LiteralPath $legacy -Destination $saved
+            if ((Get-FileHash -LiteralPath $legacy -Algorithm SHA256).Hash -ne
+                (Get-FileHash -LiteralPath $saved -Algorithm SHA256).Hash) {
+                throw "Legacy settings migration failed: $name"
+            }
+        }
+        $legacyBackupDir = [IO.Path]::GetFullPath((Join-Path $stagingRoot ('legacy-settings-' + [Guid]::NewGuid().ToString('N'))))
+        if (-not $legacyBackupDir.StartsWith($stagingRoot + '\', [StringComparison]::OrdinalIgnoreCase)) {
+            throw 'Legacy settings backup escaped the staging directory.'
+        }
+        New-Item -ItemType Directory -Path $legacyBackupDir -Force | Out-Null
+        Move-Item -LiteralPath $legacy -Destination (Join-Path $legacyBackupDir $name)
+        Write-Output "Legacy $name preserved at $legacyBackupDir"
+    }
     $destination = Join-Path $publishDir 'DeadlockVmdlCompiler.exe'
     $sourceHash = (Get-FileHash -LiteralPath $stageFiles[0].FullName -Algorithm SHA256).Hash
     $copied = $false
