@@ -10,6 +10,71 @@ internal static class ModelDocAg2Editor
 {
     private readonly record struct Node(int Start, int End, string ClassName);
 
+    internal static string SetNodeDisabled(string content, string className, bool disabled)
+    {
+        var classPattern = new Regex(@"\b_class\s*=\s*""" + Regex.Escape(className) + @"""",
+            RegexOptions.IgnoreCase);
+        var disabledPattern = new Regex(@"\bdisabled\s*=\s*(true|false)\b", RegexOptions.IgnoreCase);
+        var value = disabled ? "true" : "false";
+        var searchStart = 0;
+
+        while (searchStart < content.Length)
+        {
+            var classMatch = classPattern.Match(content, searchStart);
+            if (!classMatch.Success) break;
+            searchStart = classMatch.Index + classMatch.Length;
+            if (IsIgnoredAt(content, classMatch.Index)) continue;
+
+            var nodeStart = FindEnclosingOpenBrace(content, classMatch.Index);
+            if (nodeStart < 0) continue;
+            var nodeClose = FindMatching(content, nodeStart, '{', '}');
+            if (nodeClose < 0) continue;
+            var node = new Node(nodeStart, nodeClose + 1, className);
+            if (!IsDirectField(content, node, classMatch.Index)) continue;
+
+            var block = content.Substring(node.Start, node.End - node.Start);
+            var fields = disabledPattern.Matches(block).Cast<Match>()
+                .Where(field => !IsIgnoredAt(content, node.Start + field.Index) &&
+                                IsDirectField(content, node, node.Start + field.Index))
+                .ToList();
+            if (fields.Count > 0)
+            {
+                foreach (var field in fields.AsEnumerable().Reverse())
+                {
+                    var oldValue = field.Groups[1];
+                    block = block.Remove(oldValue.Index, oldValue.Length).Insert(oldValue.Index, value);
+                }
+            }
+            else
+            {
+                var lineStart = content.LastIndexOf('\n', classMatch.Index) + 1;
+                var indent = content.Substring(lineStart, classMatch.Index - lineStart);
+                if (indent.Any(c => c is not (' ' or '\t'))) indent = "\t";
+                var newline = content.Contains("\r\n", StringComparison.Ordinal) ? "\r\n" : "\n";
+                block = block.Insert(classMatch.Index + classMatch.Length - node.Start,
+                    newline + indent + "disabled = " + value);
+            }
+
+            content = content.Remove(node.Start, node.End - node.Start).Insert(node.Start, block);
+            searchStart = node.Start + block.Length;
+        }
+
+        return content;
+    }
+
+    private static int FindEnclosingOpenBrace(string content, int position)
+    {
+        var openBraces = new Stack<int>();
+        for (var i = 0; i < position; i++)
+        {
+            var skipped = SkipIgnored(content, i);
+            if (skipped != i) { i = skipped - 1; continue; }
+            if (content[i] == '{') openBraces.Push(i);
+            else if (content[i] == '}' && openBraces.Count > 0) openBraces.Pop();
+        }
+        return openBraces.Count > 0 ? openBraces.Peek() : -1;
+    }
+
     public static (string Content, List<string> Changes) Upgrade(
         string content, string skelPath, string graphPath, string? uiGraphPath,
         bool addSkel, bool addGraph, bool addUiGraph, bool upgradeHeader, string header)

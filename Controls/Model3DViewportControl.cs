@@ -24,9 +24,10 @@ public class Model3DViewportControl : Control
         set => SetValue(CurrentMeshProperty, value);
     }
 
-    private float _yaw = 225.0f;
-    private float _pitch = 15.0f;
-    private float _distance = 3.2f;
+    // Source 2 models face +X. In the viewport conversion, +X remains +X.
+    private float _yaw = 105.0f;
+    private float _pitch = 12.0f;
+    private float _distance = 4.8f;
     private Point _lastPointerPos;
     private bool _isDragging;
 

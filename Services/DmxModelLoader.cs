@@ -63,7 +63,8 @@ public static class DmxModelLoader
             if (compositeMesh.Vertices.Count > 0)
             {
                 compositeMesh.RecalculateBounds();
-                LogDebug("[3D Loader] Composite Mesh ready: " + compositeMesh.Vertices.Count + " verts, " + (compositeMesh.Indices.Count / 3) + " tris, " + compositeMesh.Materials.Count + " active materials");
+                var texturedMaterials = compositeMesh.Materials.Count(material => material.Pixels.Length > 0);
+                LogDebug("[3D Loader] Composite Mesh ready: " + compositeMesh.Vertices.Count + " verts, " + (compositeMesh.Indices.Count / 3) + " tris, " + compositeMesh.Materials.Count + " active materials (" + texturedMaterials + " textured)");
                 return compositeMesh;
             }
 
@@ -124,9 +125,9 @@ public static class DmxModelLoader
                         var tex = LoadMeshTextureFromVmat(c, vmdlDir, addonRoot);
                         if (tex != null)
                         {
-                            matDb[kv.Key] = tex;
-                            matDb[Path.GetFileNameWithoutExtension(kv.Key)] = tex;
-                            matDb[Path.GetFileNameWithoutExtension(c)] = tex;
+                            RegisterMaterialAliases(matDb, c, addonRoot, tex);
+                            RegisterMaterialKey(matDb, kv.Key, tex, overwrite: true);
+                            RegisterMaterialKey(matDb, Path.GetFileNameWithoutExtension(kv.Key), tex, overwrite: true);
                             break;
                         }
                     }
@@ -148,14 +149,13 @@ public static class DmxModelLoader
             {
                 foreach (var vmat in Directory.GetFiles(dir, "*.vmat", SearchOption.AllDirectories))
                 {
-                    var stem = Path.GetFileNameWithoutExtension(vmat);
-                    if (!matDb.ContainsKey(stem))
+                    var materialKey = NormalizeMaterialKey(Path.GetRelativePath(addonRoot ?? vmdlDir, vmat));
+                    if (!matDb.ContainsKey(materialKey))
                     {
                         var tex = LoadMeshTextureFromVmat(vmat, vmdlDir, addonRoot);
                         if (tex != null)
                         {
-                            matDb[stem] = tex;
-                            matDb[Path.GetFileName(vmat)] = tex;
+                            RegisterMaterialAliases(matDb, vmat, addonRoot, tex);
                         }
                     }
                 }
@@ -166,17 +166,57 @@ public static class DmxModelLoader
         return matDb;
     }
 
+    private static string NormalizeMaterialKey(string key) => key.Trim().Replace('\\', '/').TrimStart('/');
+
+    private static void RegisterMaterialKey(Dictionary<string, MeshTexture> materialDb, string key,
+        MeshTexture material, bool overwrite = false)
+    {
+        var normalized = NormalizeMaterialKey(key);
+        if (normalized.Length > 0 && (overwrite || !materialDb.ContainsKey(normalized)))
+            materialDb[normalized] = material;
+    }
+
+    private static void RegisterMaterialAliases(Dictionary<string, MeshTexture> materialDb,
+        string vmatPath, string? addonRoot, MeshTexture material)
+    {
+        if (!string.IsNullOrEmpty(addonRoot))
+        {
+            var relative = NormalizeMaterialKey(Path.GetRelativePath(addonRoot, vmatPath));
+            RegisterMaterialKey(materialDb, relative, material);
+            RegisterMaterialKey(materialDb, Path.ChangeExtension(relative, null) ?? relative, material);
+        }
+
+        RegisterMaterialKey(materialDb, Path.GetFileName(vmatPath), material);
+        RegisterMaterialKey(materialDb, Path.GetFileNameWithoutExtension(vmatPath), material);
+    }
+
+    private static MeshTexture? ResolveMaterial(Dictionary<string, MeshTexture> materialDb, string name)
+    {
+        var key = NormalizeMaterialKey(name);
+        if (materialDb.TryGetValue(key, out var material)) return material;
+        if (materialDb.TryGetValue(Path.GetFileName(key), out material)) return material;
+        return materialDb.TryGetValue(Path.GetFileNameWithoutExtension(key), out material) ? material : null;
+    }
+
     private static MeshTexture? LoadMeshTextureFromVmat(string vmatPath, string vmdlDir, string? addonRoot)
     {
         try
         {
             var text = File.ReadAllText(vmatPath);
-            var texMatch = Regex.Match(text, @"""?TextureColor\d*""?\s*""([^""]+)""", RegexOptions.IgnoreCase);
-
             string? texFile = null;
-            if (texMatch.Success)
+            var colorReferences = Regex.Matches(text, @"""TextureColor\d*""\s*""([^""]+)""", RegexOptions.IgnoreCase)
+                .Cast<Match>()
+                .Concat(Regex.Matches(text, @"""g_tColor\d*""\s*""([^""]+)""", RegexOptions.IgnoreCase).Cast<Match>());
+            foreach (var colorReference in colorReferences)
             {
-                var rel = texMatch.Groups[1].Value.Replace('/', Path.DirectorySeparatorChar);
+                var reference = colorReference.Groups[1].Value;
+                if (!Regex.IsMatch(reference, @"\.(png|jpe?g|tga|bmp|vtex(?:_c)?)$", RegexOptions.IgnoreCase))
+                    continue;
+
+                var rel = reference.Replace('/', Path.DirectorySeparatorChar);
+                if (rel.EndsWith(".vtex", StringComparison.OrdinalIgnoreCase) ||
+                    rel.EndsWith(".vtex_c", StringComparison.OrdinalIgnoreCase))
+                    rel = Path.ChangeExtension(rel, ".png");
                 var fnOnly = Path.GetFileName(rel);
 
                 var candidates = new List<string>
@@ -201,24 +241,22 @@ public static class DmxModelLoader
                         break;
                     }
                 }
+                if (texFile != null) break;
             }
 
             int fallbackCol = GetFallbackColorFromStem(Path.GetFileNameWithoutExtension(vmatPath));
 
-            var colorMatch = Regex.Match(text, @"""?g_vColorTint\d*""?\s*""\[([\d\.\s]+)\]""", RegexOptions.IgnoreCase);
-            if (colorMatch.Success)
+            var baseColor = Regex.Match(text, @"""TextureColor\d*""\s*""\[([^\]]+)\]""", RegexOptions.IgnoreCase);
+            if (TryParseColorVector(baseColor, out var baseR, out var baseG, out var baseB))
+                fallbackCol = PackColor(baseR, baseG, baseB);
+
+            var colorTint = Regex.Match(text, @"""g_vColorTint\d*""\s*""\[([^\]]+)\]""", RegexOptions.IgnoreCase);
+            if (TryParseColorVector(colorTint, out var tintR, out var tintG, out var tintB))
             {
-                var nums = colorMatch.Groups[1].Value.Split(' ', StringSplitOptions.RemoveEmptyEntries);
-                if (nums.Length >= 3 &&
-                    float.TryParse(nums[0], System.Globalization.NumberStyles.Float, System.Globalization.CultureInfo.InvariantCulture, out float r) &&
-                    float.TryParse(nums[1], System.Globalization.NumberStyles.Float, System.Globalization.CultureInfo.InvariantCulture, out float g) &&
-                    float.TryParse(nums[2], System.Globalization.NumberStyles.Float, System.Globalization.CultureInfo.InvariantCulture, out float b))
-                {
-                    byte br = (byte)Math.Clamp((int)(r * 255), 0, 255);
-                    byte bg = (byte)Math.Clamp((int)(g * 255), 0, 255);
-                    byte bb = (byte)Math.Clamp((int)(b * 255), 0, 255);
-                    fallbackCol = unchecked((int)(0xFF000000 | ((uint)br << 16) | ((uint)bg << 8) | bb));
-                }
+                fallbackCol = PackColor(
+                    ((fallbackCol >> 16) & 0xFF) / 255f * tintR,
+                    ((fallbackCol >> 8) & 0xFF) / 255f * tintG,
+                    (fallbackCol & 0xFF) / 255f * tintB);
             }
 
             if (!string.IsNullOrEmpty(texFile) && File.Exists(texFile))
@@ -226,20 +264,24 @@ public static class DmxModelLoader
                 try
                 {
                     using var stream = File.OpenRead(texFile);
-                    var bmp = new Bitmap(stream);
+                    using var bmp = new Bitmap(stream);
                     int w = bmp.PixelSize.Width;
                     int h = bmp.PixelSize.Height;
 
-                    int maxDim = 512;
-                    int targetW = w > maxDim ? maxDim : w;
-                    int targetH = h > maxDim ? maxDim : h;
-
-                    var wb = new WriteableBitmap(new PixelSize(targetW, targetH), new Avalonia.Vector(96, 96), PixelFormat.Bgra8888, AlphaFormat.Unpremul);
-                    using (var locked = wb.Lock())
+                    const int maxDim = 512;
+                    var scale = Math.Min(1f, maxDim / (float)Math.Max(w, h));
+                    int targetW = Math.Max(1, (int)MathF.Round(w * scale));
+                    stream.Position = 0;
+                    using var decoded = WriteableBitmap.DecodeToWidth(stream, targetW, BitmapInterpolationMode.MediumQuality);
+                    targetW = decoded.PixelSize.Width;
+                    int targetH = decoded.PixelSize.Height;
+                    using (var locked = decoded.Lock())
                     {
-                        bmp.CopyPixels(new PixelRect(0, 0, targetW, targetH), locked.Address, locked.RowBytes * targetH, locked.RowBytes);
+                        if (locked.Format != PixelFormat.Bgra8888)
+                            throw new NotSupportedException("Unsupported decoded pixel format: " + locked.Format);
                         var pixels = new int[targetW * targetH];
-                        Marshal.Copy(locked.Address, pixels, 0, pixels.Length);
+                        for (var row = 0; row < targetH; row++)
+                            Marshal.Copy(IntPtr.Add(locked.Address, row * locked.RowBytes), pixels, row * targetW, targetW);
 
                         LogDebug("[3D Loader] Loaded Texture for [" + Path.GetFileNameWithoutExtension(vmatPath) + "]: " + Path.GetFileName(texFile) + " (" + targetW + "x" + targetH + ")");
                         return new MeshTexture
@@ -252,7 +294,10 @@ public static class DmxModelLoader
                         };
                     }
                 }
-                catch { }
+                catch (Exception ex)
+                {
+                    LogDebug("[3D Loader] Could not decode texture " + Path.GetFileName(texFile) + ": " + ex.Message);
+                }
             }
 
             return new MeshTexture
@@ -265,6 +310,28 @@ public static class DmxModelLoader
         {
             return null;
         }
+    }
+
+    private static bool TryParseColorVector(Match match, out float r, out float g, out float b)
+    {
+        r = g = b = 0;
+        if (!match.Success) return false;
+
+        var values = match.Groups[1].Value.Split(' ', StringSplitOptions.RemoveEmptyEntries);
+        var style = System.Globalization.NumberStyles.Float;
+        var culture = System.Globalization.CultureInfo.InvariantCulture;
+        return values.Length >= 3 &&
+               float.TryParse(values[0], style, culture, out r) &&
+               float.TryParse(values[1], style, culture, out g) &&
+               float.TryParse(values[2], style, culture, out b);
+    }
+
+    private static int PackColor(float r, float g, float b)
+    {
+        var red = (uint)Math.Clamp((int)(r * 255), 0, 255);
+        var green = (uint)Math.Clamp((int)(g * 255), 0, 255);
+        var blue = (uint)Math.Clamp((int)(b * 255), 0, 255);
+        return unchecked((int)(0xFF000000 | (red << 16) | (green << 8) | blue));
     }
 
     private static int GetFallbackColorFromStem(string stem)
@@ -594,14 +661,17 @@ public static class DmxModelLoader
                                         string matName = fs.Name;
                                         if (fs.Attrs.TryGetValue("material", out var mObj) && mObj is int mIdx && mIdx >= 0 && mIdx < elements.Count)
                                         {
-                                            matName = elements[mIdx].Name;
+                                            var materialElement = elements[mIdx];
+                                            matName = materialElement.Attrs.TryGetValue("mtlName", out var materialName) &&
+                                                      materialName is string name && !string.IsNullOrWhiteSpace(name)
+                                                ? name
+                                                : materialElement.Name;
                                         }
 
-                                        MeshTexture? targetMat = null;
-                                        if (matDb.TryGetValue(matName, out var m1)) targetMat = m1;
-                                        else if (matDb.TryGetValue(fs.Name, out var m2)) targetMat = m2;
-                                        else if (matDb.TryGetValue(dmxStem, out var m3)) targetMat = m3;
-                                        else if (matDb.TryGetValue(el.Name, out var m4)) targetMat = m4;
+                                        MeshTexture? targetMat = ResolveMaterial(matDb, matName)
+                                            ?? ResolveMaterial(matDb, fs.Name)
+                                            ?? ResolveMaterial(matDb, dmxStem)
+                                            ?? ResolveMaterial(matDb, el.Name);
 
                                         if (targetMat == null)
                                         {

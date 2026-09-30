@@ -24,6 +24,7 @@ Deadlock uses AnimGraph 2 (AG2) animation structures. Standard CSDK12 tooling ca
 ## Interface & Controls Reference
 
 ### Model Selection & Presets
+- **add addon**: Exports the selected hero's main model, animations, materials, textures, and available cloth assets into a CSDK12 addon using the original VPK paths. The catalog contains 44 heroes, including Baba, Deadman Danny, Nurse Harrow, Rat King, Solomon, and Violet. Cloth nodes may still need manual fixes. The September 2026 prerelease models reference default AG2 graphs that are not yet shipped in the installed VPK; presets retain those exact references.
 - **discovered addon**: Auto-detects and lists all available addons in your content folder.
 - **target vmdl file**: Selects the target .vmdl model file inside the selected addon.
 - **hero preset**: Auto-detects or selects the hero archetype to assign corresponding skeleton and AnimGraph paths.
@@ -32,8 +33,6 @@ Deadlock uses AnimGraph 2 (AG2) animation structures. Standard CSDK12 tooling ca
 - **compile**: Runs the full automated compilation pipeline (injects AG2 references, compiles via CSWin64 ModelDoc, verifies the AG2 references in the compiled .vmdl_c before deployment, copies it to the addon game directory, and leaves the CSDK .vmdl unchanged when revert is enabled (otherwise it saves the injected version).
 - **compile-to-VPK protection**: After a successful CSWin64 compile, the app holds a Windows read-only handle on the deployed `.vmdl_c` so CSDK12 cannot overwrite it while the user decides whether to create a VPK. VPK creation can still read the file. After packaging, the app reopens the archive and compares the length and SHA-256 of the selected model and all protected models against their Game addon files; protection is released only after this verification succeeds. If packaging fails, the user can keep the files locked and retry, decline packaging, or close the app to release the handles.
 - **fix(modeldoc)**: Removes all AG2 nodes from decompiled .vmdl to prevent crash.
-- **get ag2 lists**: Scans Deadlock's pak01_dir.vpk to extract up-to-date .vnmskel and .vnmgraph references for all heroes.
-- **restore ag2 list**: Resets and reloads the default built-in hero preset database.
 - **make vpk...**: Checks the selected compiled model for required AG2 references and refuses to pack if any are missing; requires a compiled Game addon and suggests `pak01_dir.vpk` in that folder as the output location.
 - **export to cswin64**: Copies the prepared source files directly to the CSWin64 workspace for manual inspection.
 
@@ -74,7 +73,9 @@ git clone https://github.com/kwlnd/deadlock-vmdl-compiler.git
 cd deadlock-vmdl-compiler
 
 dotnet build -c Release
-dotnet publish DeadlockVmdlCompiler.csproj -c Release -o ./publish
+PowerShell -NoProfile -ExecutionPolicy Bypass -File .\publish.ps1
+
+# The Windows x64 publication is self-contained: one .exe with managed and native libraries.
 
 # Run regression checks
 dotnet run --project tests/RegressionChecks/RegressionChecks.csproj -c Release
@@ -82,12 +83,14 @@ dotnet run --project tests/RegressionChecks/RegressionChecks.csproj -c Release
 ```
 
 Set `DEADLOCK_TEST_VPK` to the path of a real `pak01_dir.vpk` before running the regression command to enable the optional VPK smoke check. The default regression checks run without it.
+Pass `--new-hero-export` to additionally export and validate all six September 2026 heroes in temporary addon directories. Pass `--addon-export` to check Wraith's model and cloth export.
 
 ---
 
 ## User Data
 
-Settings and updated hero presets are stored per user under `%LocalAppData%/DeadlockVmdlCompiler`. Legacy files beside the executable are read for compatibility; their values are written to this location on the next settings save or preset update.
+Settings and user-specific hero paths are stored under `%LocalAppData%/DeadlockVmdlCompiler`. Edit `hero_paths.json` in the project and rebuild to change which presets appear in the menu; edit the local copy to change paths for existing presets. Legacy files beside the executable are read for compatibility.
+Missing built-in presets are added in memory when loading an older local database, so new heroes are available to auto-detection while existing user paths are preserved.
 
 ---
 

@@ -2,9 +2,66 @@
              xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
              x:Class="DeadlockVmdlCompiler.App"
              RequestedThemeVariant="Dark">
+    <Application.Resources>
+        <!-- The existing studio palette, shared by the workspace and its dialogs. -->
+        <SolidColorBrush x:Key="StudioWindow" Color="#11151D"/>
+        <SolidColorBrush x:Key="StudioPanel" Color="#1A2230"/>
+        <SolidColorBrush x:Key="StudioInput" Color="#131822"/>
+        <SolidColorBrush x:Key="StudioViewport" Color="#0E1219"/>
+        <SolidColorBrush x:Key="StudioBorder" Color="#2D394E"/>
+        <SolidColorBrush x:Key="StudioBorderStrong" Color="#3B4B64"/>
+        <SolidColorBrush x:Key="StudioText" Color="#E2E8F0"/>
+        <SolidColorBrush x:Key="StudioTextMuted" Color="#94A3B8"/>
+        <SolidColorBrush x:Key="StudioTextSoft" Color="#CBD5E1"/>
+        <SolidColorBrush x:Key="StudioAccent" Color="#60A5FA"/>
+        <SolidColorBrush x:Key="StudioPortrait" Color="#263247"/>
+        <SolidColorBrush x:Key="StudioPrimary" Color="#255899"/>
+        <SolidColorBrush x:Key="AutoCompleteBoxSuggestionsListBackground" Color="#1A2230"/>
+        <SolidColorBrush x:Key="AutoCompleteBoxSuggestionsListBorderBrush" Color="#3B4B64"/>
+        <SolidColorBrush x:Key="ComboBoxDropDownBackground" Color="#1A2230"/>
+        <SolidColorBrush x:Key="ComboBoxDropDownBorderBrush" Color="#3B4B64"/>
+        <SolidColorBrush x:Key="ComboBoxItemBackgroundPointerOver" Color="#263247"/>
+        <SolidColorBrush x:Key="ComboBoxItemBackgroundSelected" Color="#255899"/>
+        <SolidColorBrush x:Key="ComboBoxItemBackgroundSelectedPointerOver" Color="#306CB5"/>
+        <SolidColorBrush x:Key="ComboBoxItemBackgroundSelectedPressed" Color="#1C4578"/>
+    </Application.Resources>
     <Application.Styles>
         <FluentTheme />
-        
+
+        <!-- Shared type and surface hierarchy. -->
+        <Style Selector="Border.studio-card">
+            <Setter Property="Background" Value="{StaticResource StudioPanel}"/>
+            <Setter Property="BorderBrush" Value="{StaticResource StudioBorder}"/>
+            <Setter Property="BorderThickness" Value="1"/>
+            <Setter Property="CornerRadius" Value="6"/>
+        </Style>
+        <Style Selector="Border.studio-inset">
+            <Setter Property="Background" Value="{StaticResource StudioInput}"/>
+            <Setter Property="BorderBrush" Value="{StaticResource StudioBorder}"/>
+            <Setter Property="BorderThickness" Value="1"/>
+            <Setter Property="CornerRadius" Value="4"/>
+        </Style>
+        <Style Selector="TextBlock.section-title">
+            <Setter Property="FontSize" Value="11"/>
+            <Setter Property="FontWeight" Value="Bold"/>
+            <Setter Property="Foreground" Value="{StaticResource StudioTextMuted}"/>
+            <Setter Property="VerticalAlignment" Value="Center"/>
+        </Style>
+        <Style Selector="TextBlock.field-label">
+            <Setter Property="FontSize" Value="11.5"/>
+            <Setter Property="FontWeight" Value="SemiBold"/>
+            <Setter Property="Foreground" Value="{StaticResource StudioText}"/>
+        </Style>
+        <Style Selector="TextBlock.field-hint">
+            <Setter Property="FontSize" Value="10"/>
+            <Setter Property="Foreground" Value="{StaticResource StudioTextMuted}"/>
+        </Style>
+        <Style Selector="TextBlock.body-copy">
+            <Setter Property="FontSize" Value="11.5"/>
+            <Setter Property="Foreground" Value="{StaticResource StudioTextSoft}"/>
+            <Setter Property="TextWrapping" Value="Wrap"/>
+        </Style>
+
         <!-- Global Studio Styling -->
         
         <!-- Standard Action Button -->
@@ -16,6 +73,8 @@
             <Setter Property="CornerRadius" Value="5" />
             <Setter Property="Padding" Value="10,5" />
             <Setter Property="FontSize" Value="11.5" />
+            <Setter Property="HorizontalContentAlignment" Value="Center" />
+            <Setter Property="VerticalContentAlignment" Value="Center" />
             <Setter Property="Cursor" Value="Hand" />
         </Style>
         <Style Selector="Button:pointerover /template/ ContentPresenter">
@@ -50,6 +109,18 @@
         <Style Selector="Button.primary:pressed /template/ ContentPresenter">
             <Setter Property="Background" Value="#1C4578" />
         </Style>
+        <Style Selector="Button.utility">
+            <Setter Property="Padding" Value="8,2"/>
+            <Setter Property="FontSize" Value="11"/>
+        </Style>
+        <Style Selector="Button.subtle-toggle:pointerover /template/ ContentPresenter">
+            <Setter Property="Background" Value="Transparent"/>
+            <Setter Property="BorderBrush" Value="Transparent"/>
+        </Style>
+        <Style Selector="Button.subtle-toggle:pressed /template/ ContentPresenter">
+            <Setter Property="Background" Value="Transparent"/>
+            <Setter Property="BorderBrush" Value="Transparent"/>
+        </Style>
 
         <!-- TextBox -->
         <Style Selector="TextBox">
@@ -81,6 +152,31 @@
         <Style Selector="ComboBox:pointerover /template/ Border#Background">
             <Setter Property="Background" Value="#19202E" />
             <Setter Property="BorderBrush" Value="#41506B" />
+        </Style>
+
+        <Style Selector="AutoCompleteBox">
+            <Setter Property="Background" Value="{StaticResource StudioInput}"/>
+            <Setter Property="Foreground" Value="{StaticResource StudioText}"/>
+            <Setter Property="BorderBrush" Value="{StaticResource StudioBorder}"/>
+            <Setter Property="BorderThickness" Value="1"/>
+            <Setter Property="CornerRadius" Value="5"/>
+            <Setter Property="FontSize" Value="12"/>
+        </Style>
+        <Style Selector="ListBox">
+            <Setter Property="Background" Value="{StaticResource StudioPanel}"/>
+            <Setter Property="BorderBrush" Value="{StaticResource StudioBorder}"/>
+            <Setter Property="BorderThickness" Value="1"/>
+        </Style>
+        <Style Selector="ListBoxItem">
+            <Setter Property="Background" Value="Transparent"/>
+            <Setter Property="Foreground" Value="{StaticResource StudioText}"/>
+            <Setter Property="Padding" Value="8,5"/>
+        </Style>
+        <Style Selector="ListBoxItem:pointerover /template/ ContentPresenter">
+            <Setter Property="Background" Value="{StaticResource StudioPortrait}"/>
+        </Style>
+        <Style Selector="ListBoxItem:selected /template/ ContentPresenter">
+            <Setter Property="Background" Value="{StaticResource StudioPrimary}"/>
         </Style>
 
         <!-- CheckBox -->

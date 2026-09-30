@@ -1,5 +1,7 @@
 using System.Text.RegularExpressions;
+using System.Text.Json;
 using DeadlockVmdlCompiler.Services;
+using DeadlockVmdlCompiler.Models;
 using ValveResourceFormat;
 
 static void Check(bool condition, string message)
@@ -77,6 +79,57 @@ Check(!commented.Changes.Any(c => c.StartsWith("Error:")) &&
       commented.UpgradedContent.Contains("// filename = \"commented.vnmgraph\""),
     "Commented ModelDoc text was treated as a live field.");
 
+var animationModel = header + """
+
+{ rootNode = { _class = "RootNode" children = [
+    { _class = "AnimationList" disabled = true children = [
+        { _class = "Folder" children = [
+            { _class = "AnimFile" name = "active_legacy" disabled = false source_filename = "models/demo/active.dmx" },
+            { _class = "AnimFile" name = "muted_legacy" disabled = true source_filename = "models/demo/muted.dmx" }
+        ] }
+    ] },
+    { _class = "AnimGraph" disabled = false children = [
+        { _class = "Folder" disabled = false }
+    ] }
+] } }
+""";
+var sanitizedAnimations = Ag2Sanitizer.SanitizeVmdlContent(animationModel).CleanContent;
+Check(sanitizedAnimations.Contains("_class = \"AnimFile\" name = \"active_legacy\" disabled = false") &&
+      sanitizedAnimations.Contains("_class = \"AnimFile\" name = \"muted_legacy\" disabled = true") &&
+      sanitizedAnimations.Contains("_class = \"Folder\" disabled = false"),
+    "ModelDoc sanitizer changed disabled flags on children inside an animation node.");
+var withAnimations = VmdlPipeline.DisableAnimationNodesForCompilation(sanitizedAnimations, disableAnimationList: false);
+Check(Regex.IsMatch(withAnimations, @"_class\s*=\s*""AnimationList""\s+disabled\s*=\s*false\b") &&
+      withAnimations.Contains("_class = \"AnimFile\" name = \"active_legacy\" disabled = false") &&
+      withAnimations.Contains("_class = \"AnimFile\" name = \"muted_legacy\" disabled = true"),
+    "Unchecking disable animations did not enable the exported AnimationList without changing clips.");
+Check(VmdlPipeline.DisableAnimationNodesForCompilation(withAnimations, disableAnimationList: false) == withAnimations,
+    "Enabling the AnimationList is not idempotent.");
+var withoutAnimations = VmdlPipeline.DisableAnimationNodesForCompilation(withAnimations, disableAnimationList: true);
+Check(Regex.IsMatch(withoutAnimations, @"_class\s*=\s*""AnimationList""\s+disabled\s*=\s*true\b") &&
+      withoutAnimations.Contains("_class = \"AnimFile\" name = \"active_legacy\" disabled = false"),
+    "Checking disable animations did not disable only the AnimationList.");
+Check(VmdlPipeline.DisableAnimationNodesForCompilation(withoutAnimations, disableAnimationList: false) == withAnimations,
+    "AnimationList state did not round-trip when toggling the checkbox.");
+var animationWithoutFlag = animationModel.Replace("_class = \"AnimationList\" disabled = true",
+    "_class = \"AnimationList\"");
+var compiledWithoutFlag = VmdlPipeline.DisableAnimationNodesForCompilation(animationWithoutFlag, disableAnimationList: false);
+Check(Regex.IsMatch(compiledWithoutFlag, @"_class\s*=\s*""AnimationList""\s+disabled\s*=\s*false\b"),
+    "An AnimationList without an explicit disabled field was not enabled.");
+
+var realAnimationVmdl = Environment.GetEnvironmentVariable("DEADLOCK_TEST_ANIMATION_VMDL");
+if (!string.IsNullOrWhiteSpace(realAnimationVmdl))
+{
+    var originalModel = File.ReadAllText(realAnimationVmdl);
+    var enabledModel = VmdlPipeline.DisableAnimationNodesForCompilation(originalModel, disableAnimationList: false);
+    var originalClipCount = Regex.Matches(originalModel, @"_class\s*=\s*""AnimFile""").Count;
+    Check(originalClipCount > 0 &&
+          Regex.IsMatch(enabledModel, @"_class\s*=\s*""AnimationList""\s+disabled\s*=\s*false\b") &&
+          Regex.Matches(enabledModel, @"_class\s*=\s*""AnimFile""").Count == originalClipCount,
+        "Real ModelDoc lost animations or kept AnimationList disabled.");
+    Console.WriteLine($"Real ModelDoc animation check passed ({originalClipCount} AnimFile nodes).");
+}
+
 var root = Path.Combine(Path.GetTempPath(), "deadlock-regression-" + Guid.NewGuid().ToString("N"));
 Directory.CreateDirectory(root);
 try
@@ -152,10 +205,108 @@ try
           AddonCreationService.ValidateName("_hidden") != null,
         "Unsafe addon name was accepted.");
 
+    var expectedHeroNames = new[]
+    {
+        "Abrams", "Apollo", "Baba", "Bebop", "Billy", "Calico", "Celeste", "Deadman Danny", "Drifter", "Dynamo",
+        "The Doorman", "Graves", "Grey Talon", "Haze", "Holliday", "Infernus", "Ivy",
+        "Kelvin", "Lady Geist", "Lash", "McGinnis", "Mina", "Mirage", "Mo & Krill",
+        "Nurse Harrow", "Paige", "Paradox", "Pocket", "Rat King", "Rem", "Seven", "Shiv", "Silver", "Sinclair",
+        "Solomon", "Venator", "Victor", "Vindicta", "Violet", "Viscous", "Vyper", "Warden", "Wraith", "Yamato"
+    };
+    var newHeroPresets = new[]
+    {
+        (HeroKey: "baba", PresetKey: "baba"),
+        (HeroKey: "deadman_danny", PresetKey: "deadpack"),
+        (HeroKey: "nurse_harrow", PresetKey: "nurse"),
+        (HeroKey: "rat_king", PresetKey: "ratking"),
+        (HeroKey: "solomon", PresetKey: "chessmaster"),
+        (HeroKey: "violet", PresetKey: "artist")
+    };
+    var catalogHeroes = DeadlockHeroCatalog.GetHeroes();
+    Check(catalogHeroes.Select(hero => hero.DisplayName).SequenceEqual(expectedHeroNames),
+        "The addon hero catalog does not match the current 44-hero roster.");
+    Check(catalogHeroes.Select(hero => hero.HeroKey).Distinct(StringComparer.OrdinalIgnoreCase).Count() == expectedHeroNames.Length,
+        "The addon hero catalog contains duplicate hero keys.");
+
+    using (var baselineStream = typeof(HeroDatabase).Assembly.GetManifestResourceStream(
+               "DeadlockVmdlCompiler.hero_paths.json"))
+    {
+        Check(baselineStream != null, "The built-in AG2 preset database is missing.");
+        var baselinePresets = JsonSerializer.Deserialize<Dictionary<string, HeroPreset>>(baselineStream!);
+        Check(baselinePresets is { Count: > 0 }, "The built-in AG2 preset database is empty.");
+        var visiblePresets = HeroDatabase.GetVisiblePresets();
+        Check(visiblePresets.Count == baselinePresets!.Count &&
+              visiblePresets.Keys.ToHashSet(StringComparer.OrdinalIgnoreCase)
+                  .SetEquals(baselinePresets.Keys),
+            "The preset menu must use the curated built-in key list, even when a local database exists.");
+        var visibleHeroKeys = visiblePresets
+            .Select(pair => HeroPresetMatcher.FindKnownHero(pair.Key, pair.Value)?.HeroKey)
+            .Where(key => key != null)
+            .ToList();
+        Check(visibleHeroKeys.Count == catalogHeroes.Count &&
+              visibleHeroKeys.Distinct(StringComparer.OrdinalIgnoreCase).Count() == catalogHeroes.Count,
+            "The preset menu contains duplicate heroes or is missing a hero.");
+        foreach (var hero in catalogHeroes)
+            Check(baselinePresets!.Any(pair =>
+                    HeroPresetMatcher.FindKnownHero(pair.Key, pair.Value)?.HeroKey == hero.HeroKey),
+                $"No AG2 skeleton preset maps to {hero.DisplayName}.");
+        foreach (var (heroKey, presetKey) in newHeroPresets)
+        {
+            var hero = catalogHeroes.Single(candidate => candidate.HeroKey == heroKey);
+            Check(HeroDatabase.GetDatabase().ContainsKey(presetKey),
+                $"An older local database hides the new {hero.DisplayName} preset.");
+            Check(VmdlPipeline.DetectHeroFromPath("C:/addons/test/" + hero.VpkPath[..^2]) == presetKey,
+                $"Exported {hero.DisplayName} does not auto-detect its AG2 preset.");
+            Check(VmdlPipeline.DetectHeroFromPath($"C:/addons/test/models/{heroKey}/custom.vmdl") == presetKey,
+                $"The {hero.DisplayName} public name does not auto-detect its AG2 preset.");
+            Check(HeroPresetMatcher.FindKnownHero("custom_" + presetKey, baselinePresets![presetKey])?.HeroKey == heroKey,
+                $"Exact AG2 references under a custom key do not identify {hero.DisplayName}.");
+        }
+        Check(HeroPresetMatcher.FindKnownHero("seven", baselinePresets!["seven"])?.HeroKey == "seven",
+            "Seven still maps to Victor's AG2 skeleton.");
+        Check(baselinePresets["familiar_wip"].UiGraph.EndsWith("+familiar.vnmgraph", StringComparison.Ordinal),
+            "Rem's UI AG2 graph still points to Frank.");
+        Check(HeroPresetMatcher.FindKnownHero("seven", new HeroPreset
+        {
+            Skel = "models/heroes_wip/frank/frank.vnmskel"
+        }) == null, "A mismatched skeleton was given Seven's portrait.");
+        Check(HeroPresetMatcher.FindKnownHero("custom_apollo", baselinePresets["fencer"])?.HeroKey == "apollo",
+            "An exact AG2 skeleton and graph under a custom key did not identify Apollo.");
+        Check(HeroPresetMatcher.FindKnownHero("custom_viscous", baselinePresets["viscous"])?.HeroKey == "viscous",
+            "A shared skeleton did not use its graph to distinguish Viscous from Kelvin.");
+        foreach (var (folder, key) in new[]
+                 {
+                     ("familiar", "familiar_wip"), ("gigawatt_prisoner", "seven"),
+                     ("hornet_v3", "vindicta"), ("inferno", "infernus"),
+                     ("nano_v2", "calico"), ("synth", "pocket"), ("tengu", "ivy")
+                 })
+            Check(VmdlPipeline.DetectHeroFromPath($"C:/addons/test/models/{folder}/model.vmdl") == key,
+                $"Old model folder {folder} does not resolve to the curated preset {key}.");
+    }
+
     var deadlockVpk = args.FirstOrDefault(a => !a.StartsWith("--", StringComparison.Ordinal)) ??
                       Environment.GetEnvironmentVariable("DEADLOCK_TEST_VPK");
     if (!string.IsNullOrWhiteSpace(deadlockVpk))
     {
+        var vpkEntries = VpkHeroScanner.ReadVpkDirectory(deadlockVpk);
+        var vpkPaths = vpkEntries.Select(entry =>
+            $"{entry.Directory}/{entry.FileName}.{entry.Extension}")
+            .ToHashSet(StringComparer.OrdinalIgnoreCase);
+        foreach (var catalogHero in catalogHeroes)
+        {
+            Check(vpkPaths.Contains(catalogHero.VpkPath),
+                $"Missing model in Deadlock VPK: {catalogHero.DisplayName}.");
+            if (catalogHero.IconVpkPath != null)
+                Check(vpkPaths.Contains(catalogHero.IconVpkPath),
+                    $"Missing small portrait in Deadlock VPK: {catalogHero.DisplayName}.");
+        }
+        var portraits = HeroIconLoader.LoadSmallPortraits(deadlockVpk, catalogHeroes);
+        Check(portraits.Count == catalogHeroes.Count(hero => hero.IconVpkPath != null),
+            "Not all available small hero portraits could be decoded.");
+        Check(portraits.Values.All(png => png.Length > 8 &&
+              png[0] == 0x89 && png[1] == 0x50 && png[2] == 0x4e && png[3] == 0x47),
+            "A hero portrait was not decoded to PNG.");
+
         var heroBytes = VpkHeroScanner.ExtractFileFromVpk(deadlockVpk,
             "models/heroes_staging/hornet_v3/hornet.vmdl_c");
         Check(heroBytes is { Length: > 0 }, "Could not extract Vindicta model from Deadlock VPK.");
@@ -167,7 +318,7 @@ try
             "Vindicta compiled model did not expose expected AG2 fields.");
         var heroFile = Path.Combine(root, "hornet.vmdl_c");
         File.WriteAllBytes(heroFile, heroBytes!);
-        var hornetPreset = HeroDatabase.GetDatabase()["hornet"];
+        var hornetPreset = HeroDatabase.GetVisiblePresets()["vindicta"];
         var verificationError = VmdlPipeline.VerifyCompiledAg2References(
             heroFile, hornetPreset.Skel, hornetPreset.Graph, hornetPreset.UiGraph);
         Check(verificationError == null, "Compiled AG2 verification rejected Vindicta: " + verificationError);
@@ -175,7 +326,68 @@ try
             heroFile, hornetPreset.Skel, "animgraphs/does_not_exist.vnmgraph", hornetPreset.UiGraph);
         Check(missingGraph?.Contains("DefaultAnimGraph2") == true,
             "Compiled AG2 verification accepted a missing graph.");
+        foreach (var (heroKey, presetKey) in newHeroPresets)
+        {
+            var hero = catalogHeroes.Single(candidate => candidate.HeroKey == heroKey);
+            var preset = HeroDatabase.GetVisiblePresets()[presetKey];
+            Check(vpkPaths.Contains(preset.Skel + "_c") && vpkPaths.Contains(preset.UiGraph + "_c"),
+                $"Missing skeleton or UI graph in the VPK for {hero.DisplayName}.");
+            var compiledFile = Path.Combine(root, presetKey + ".vmdl_c");
+            File.WriteAllBytes(compiledFile, VpkHeroScanner.ExtractFileFromVpk(deadlockVpk, hero.VpkPath)!);
+            var newHeroError = VmdlPipeline.VerifyCompiledAg2References(
+                compiledFile, preset.Skel, preset.Graph, preset.UiGraph);
+            Check(newHeroError == null,
+                $"The {hero.DisplayName} preset differs from the game's actual AG2 references: {newHeroError}");
+        }
         Console.WriteLine("Deadlock VPK AG2 smoke check passed.");
+
+        if (args.Contains("--new-hero-export"))
+        {
+            var csdkRoot = Path.Combine(root, "new_hero_csdk12");
+            var contentAddons = Path.Combine(csdkRoot, "content", "citadel_addons");
+            Directory.CreateDirectory(contentAddons);
+            Directory.CreateDirectory(Path.Combine(csdkRoot, "game", "citadel_addons"));
+            foreach (var (heroKey, presetKey) in newHeroPresets)
+            {
+                var hero = catalogHeroes.Single(candidate => candidate.HeroKey == heroKey);
+                var addon = await AddonCreationService.CreateAsync(contentAddons, deadlockVpk,
+                    hero, presetKey + "_export_test");
+                Check(File.Exists(addon.MainVmdlPath) &&
+                      Path.GetRelativePath(addon.ContentDirectory, addon.MainVmdlPath).Replace('\\', '/') == hero.VpkPath[..^2],
+                    $"The {hero.DisplayName} export lost the main model or its VPK-relative path.");
+                Check(Directory.Exists(addon.GameDirectory) &&
+                      VmdlScanner.ScanAddons(contentAddons).Any(candidate => candidate.Name == addon.Name),
+                    $"The {hero.DisplayName} addon is absent from the CSDK12 or application list.");
+                var modelText = File.ReadAllText(addon.MainVmdlPath);
+                var meshPaths = Regex.Matches(modelText,
+                        @"_class\s*=\s*""RenderMeshFile""[^}]*?\bfilename\s*=\s*""([^""]+\.dmx)""")
+                    .Select(match => match.Groups[1].Value).Distinct().ToArray();
+                var dmxPaths = Regex.Matches(modelText, @"\bfilename\s*=\s*""([^""]+\.dmx)""")
+                    .Select(match => match.Groups[1].Value).Distinct().ToArray();
+                Check(meshPaths.Length > 0 && dmxPaths.All(path =>
+                        File.Exists(Path.Combine(addon.ContentDirectory, path.Replace('/', Path.DirectorySeparatorChar)))),
+                    $"The {hero.DisplayName} export is missing a referenced mesh, animation or cloth DMX.");
+                var materialPaths = meshPaths.SelectMany(path =>
+                        Regex.Matches(System.Text.Encoding.Latin1.GetString(File.ReadAllBytes(
+                                Path.Combine(addon.ContentDirectory, path.Replace('/', Path.DirectorySeparatorChar)))),
+                            @"[A-Za-z0-9_./-]+\.vmat\b").Select(match => match.Value))
+                    .Distinct().ToArray();
+                Check(materialPaths.Length > 0 && materialPaths.All(path =>
+                        File.Exists(Path.Combine(addon.ContentDirectory, path.Replace('/', Path.DirectorySeparatorChar)))),
+                    $"The {hero.DisplayName} export is missing referenced materials.");
+                Check(Directory.EnumerateFiles(addon.ContentDirectory, "*.png", SearchOption.AllDirectories).Any(),
+                    $"The {hero.DisplayName} export is missing material textures.");
+                var preset = HeroDatabase.GetVisiblePresets()[presetKey];
+                var injected = VmdlPipeline.UpgradeVmdlContent(modelText, preset.Skel, preset.Graph,
+                    preset.UiGraph);
+                Check(!injected.Changes.Any(change => change.StartsWith("Error:", StringComparison.Ordinal)) &&
+                      injected.UpgradedContent.Contains(preset.Skel, StringComparison.Ordinal) &&
+                      injected.UpgradedContent.Contains(preset.Graph, StringComparison.Ordinal) &&
+                      injected.UpgradedContent.Contains(preset.UiGraph, StringComparison.Ordinal),
+                    $"The {hero.DisplayName} export cannot receive its AG2 nodes for CSWin64.");
+                Console.WriteLine($"{hero.DisplayName} addon export passed: {addon.FileCount} files, {addon.ClothFileCount} cloth assets.");
+            }
+        }
 
         if (args.Contains("--addon-export"))
         {

@@ -158,7 +158,7 @@ public static class DecompilerEngine
 
                     onLog?.Invoke("[native vrf] reconstructing ModelDoc vmdl & FeModel cloth physics...");
                     var modelExtract = new ModelExtract(resource, fileLoader);
-                    var contentFile = modelExtract.ToContentFile();
+                    using var contentFile = modelExtract.ToContentFile();
                     cancellationToken.ThrowIfCancellationRequested();
 
                     onLog?.Invoke("[native vrf] saving extracted assets to disk...");
@@ -278,7 +278,7 @@ public static class DecompilerEngine
                             if (materialResource == null)
                                 throw new FileNotFoundException($"Model material is missing from game files: {materialPath}");
                             materialResource.FileName = materialPath + "_c";
-                            var materialFile = new MaterialExtract(materialResource, fileLoader).ToContentFile();
+                            using var materialFile = new MaterialExtract(materialResource, fileLoader).ToContentFile();
                             materialFile.FileName = materialPath;
                             ProcessContentFile(materialFile);
                             onLog?.Invoke($"[material] {materialPath}");

@@ -48,10 +48,37 @@ public static class VmdlPipeline
         if (parts.Length == 0)
             return null;
 
+        // Older game folders and local databases can use names removed from the
+        // curated preset menu. Resolve them to the remaining preset first.
+        var renamedFolders = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
+        {
+            ["deadman_danny"] = "deadpack",
+            ["familiar"] = "familiar_wip",
+            ["ghost"] = "geist",
+            ["gigawatt_prisoner"] = "seven",
+            ["hornet"] = "vindicta",
+            ["inferno"] = "infernus",
+            ["lady_geist"] = "geist",
+            ["nano"] = "calico",
+            ["nurse_harrow"] = "nurse",
+            ["rat_king"] = "ratking",
+            ["solomon"] = "chessmaster",
+            ["synth"] = "pocket",
+            ["tengu"] = "ivy",
+            ["violet"] = "artist"
+        };
+
         // Check parent folder names from closest upwards
         for (int i = parts.Length - 2; i >= 0; i--)
         {
             var folder = parts[i];
+            var renamed = renamedFolders
+                .Where(pair => folder.Equals(pair.Key, StringComparison.OrdinalIgnoreCase) ||
+                               folder.StartsWith(pair.Key + "_", StringComparison.OrdinalIgnoreCase))
+                .OrderByDescending(pair => pair.Key.Length)
+                .FirstOrDefault();
+            if (renamed.Value != null && db.ContainsKey(renamed.Value))
+                return renamed.Value;
             if (db.ContainsKey(folder))
                 return folder;
             var versionedMatch = db.Keys
@@ -318,11 +345,12 @@ public static class VmdlPipeline
             onLog?.Invoke($"[sync] synchronized {copied} updated asset(s) to cswin64");
         }
 
-        // 2. Disable animation nodes (disabled = true) so CSWin64 doesn't fail on missing animation DMXs
+        // 2. Apply the checkbox state to the temporary CSWin64 ModelDoc.
         progress?.Report(new CompileProgress(3, 5, 50, "[3/5] preparing modeldoc", "temporary definition..."));
         var csWinContent = DisableAnimationNodesForCompilation(upgradedVmdlContent, disableAnimationList);
 
         await File.WriteAllTextAsync(csWinVmdlPath, csWinContent);
+        onLog?.Invoke($"[prepare] AnimationList {(disableAnimationList ? "disabled" : "enabled")} for CSWin64 compilation");
         onLog?.Invoke("[prepare] wrote temporary modeldoc definition to cswin64 addon");
 
         // A successful compiler exit must not be mistaken for an old output from a previous run.
@@ -707,88 +735,16 @@ public static class VmdlPipeline
 
     public static string DisableAnimationNodesForCompilation(string content, bool disableAnimationList = true)
     {
-        if (disableAnimationList)
-        {
-            content = DisableNodeByClass(content, "AnimationList");
-        }
+        // Decompiled CSDK12 sources may already contain disabled = true. The checkbox
+        // must override that source state in both directions for the CSWin64 copy.
+        content = ModelDocAg2Editor.SetNodeDisabled(content, "AnimationList", disableAnimationList);
         content = DisableNodeByClass(content, "EmptyAnimGraph");
         content = DisableNodeByClass(content, "AnimGraph");
         return content;
     }
 
-    private static string DisableNodeByClass(string content, string className)
-    {
-        var pattern = @"_class\s*=\s*""" + Regex.Escape(className) + @"""";
-        int searchStart = 0;
-
-        while (true)
-        {
-            if (searchStart >= content.Length) break;
-            var match = Regex.Match(content[searchStart..], pattern, RegexOptions.IgnoreCase);
-            if (!match.Success) break;
-
-            int classIdx = searchStart + match.Index;
-
-            // Find the opening brace of this node block
-            int openBrace = -1;
-            for (int i = classIdx - 1; i >= 0; i--)
-            {
-                if (content[i] == '{')
-                {
-                    openBrace = i;
-                    break;
-                }
-                if (content[i] == '}')
-                    break;
-            }
-
-            if (openBrace == -1)
-            {
-                searchStart = classIdx + match.Length;
-                continue;
-            }
-
-            // Find matching closing brace
-            int depth = 0;
-            int closeBrace = -1;
-            for (int i = openBrace; i < content.Length; i++)
-            {
-                if (content[i] == '{') depth++;
-                else if (content[i] == '}')
-                {
-                    depth--;
-                    if (depth == 0)
-                    {
-                        closeBrace = i;
-                        break;
-                    }
-                }
-            }
-
-            if (closeBrace == -1)
-            {
-                searchStart = classIdx + match.Length;
-                continue;
-            }
-
-            // Extract the block content
-            var block = content.Substring(openBrace, closeBrace - openBrace + 1);
-
-            // Strip any existing 'disabled = ...' lines in this block to prevent duplicates
-            block = Regex.Replace(block, @"^[ \t]*disabled\s*=\s*(true|false)[ \t]*[\r\n]*", "", RegexOptions.IgnoreCase | RegexOptions.Multiline);
-
-            // Insert a clean 'disabled = true' right after _class = "className"
-            block = Regex.Replace(block,
-                @"(_class\s*=\s*""" + Regex.Escape(className) + @""")",
-                "$1\n\t\t\t\tdisabled = true",
-                RegexOptions.IgnoreCase);
-
-            content = content.Remove(openBrace, closeBrace - openBrace + 1).Insert(openBrace, block);
-            searchStart = openBrace + block.Length;
-        }
-
-        return content;
-    }
+    private static string DisableNodeByClass(string content, string className) =>
+        ModelDocAg2Editor.SetNodeDisabled(content, className, disabled: true);
 
     public static string RemoveModelDocNode(string content, string className)
     {

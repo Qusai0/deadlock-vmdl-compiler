@@ -8,7 +8,12 @@
     <RootNamespace>DeadlockVmdlCompiler</RootNamespace>
     <AssemblyName>DeadlockVmdlCompiler</AssemblyName>
     <PublishSingleFile>true</PublishSingleFile>
+    <RuntimeIdentifier>win-x64</RuntimeIdentifier>
     <SelfContained>false</SelfContained>
+    <PublishSelfContained>true</PublishSelfContained>
+    <IncludeNativeLibrariesForSelfExtract>true</IncludeNativeLibrariesForSelfExtract>
+    <IncludeAllContentForSelfExtract>true</IncludeAllContentForSelfExtract>
+    <EnableCompressionInSingleFile>true</EnableCompressionInSingleFile>
     <ApplicationIcon>AppIcon.ico</ApplicationIcon>
     <Product>Deadlock AG2 Compiler</Product>
     <AssemblyTitle>Deadlock AG2 Compiler</AssemblyTitle>
@@ -16,7 +21,10 @@
     <Version>1.2.1</Version>
     <AssemblyVersion>1.2.1</AssemblyVersion>
     <FileVersion>1.2.1</FileVersion>
-    <RestoreAdditionalProjectSources>$(MSBuildProjectDirectory)/third_party</RestoreAdditionalProjectSources>
+  </PropertyGroup>
+
+  <PropertyGroup Condition="'$(Configuration)' == 'Release'">
+    <DebugType>embedded</DebugType>
   </PropertyGroup>
 
   <ItemGroup>
@@ -37,7 +45,14 @@
     <PackageReference Include="Avalonia.Themes.Fluent" Version="11.2.5" />
     <PackageReference Include="Avalonia.Fonts.Inter" Version="11.2.5" />
     <PackageReference Include="ValveKeyValue" Version="0.70.0.499" />
-    <PackageReference Include="ValveResourceFormat" Version="20.0.7151" />
+    <PackageReference Include="ValveResourceFormat" Version="[20.0.7151-vcs72.1]" />
   </ItemGroup>
+
+  <Target Name="RemovePublishedDebugSymbols" AfterTargets="Publish">
+    <ItemGroup>
+      <PublishedDebugSymbols Include="$(PublishDir)*.pdb" />
+    </ItemGroup>
+    <Delete Files="@(PublishedDebugSymbols)" />
+  </Target>
 
 </Project>

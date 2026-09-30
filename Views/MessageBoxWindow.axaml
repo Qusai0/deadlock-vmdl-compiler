@@ -3,28 +3,31 @@
         x:Class="DeadlockVmdlCompiler.Views.MessageBoxWindow"
         Title="notification"
         Icon="avares://DeadlockVmdlCompiler/AppIcon.ico"
-        Width="440"
-        MinWidth="380"
+        Width="460"
+        MinWidth="400"
         MaxWidth="520"
         SizeToContent="Height"
         CanResize="False"
         WindowStartupLocation="CenterOwner"
-        Background="#161B24">
+        Background="{StaticResource StudioWindow}">
 
-    <Border BorderBrush="#2D394E" BorderThickness="1" Padding="18">
-        <StackPanel Spacing="14">
+    <Border Classes="studio-card" Margin="12" Padding="16">
+        <StackPanel Spacing="12">
             
             <!-- Header with Title & Icon -->
             <Grid ColumnDefinitions="Auto,*">
-                <Border x:Name="BorderIcon" Grid.Column="0" Width="28" Height="28" CornerRadius="6" Background="#1D2A3F" Margin="0,0,12,0" VerticalAlignment="Top">
+                <Border x:Name="BorderIcon" Grid.Column="0" Width="32" Height="32" CornerRadius="5"
+                        Background="{StaticResource StudioPortrait}" BorderBrush="{StaticResource StudioBorderStrong}"
+                        BorderThickness="1" Margin="0,0,10,0" VerticalAlignment="Top">
                     <Viewbox Width="16" Height="16" HorizontalAlignment="Center" VerticalAlignment="Center">
                         <Canvas Width="24" Height="24">
-                            <Path x:Name="IconPath" Data="M12 2C6.48 2 2 6.48 2 12C2 17.52 6.48 22 12 22C17.52 22 22 17.52 22 12C22 6.48 17.52 2 12 2ZM13 17H11V15H13V17ZM13 13H11V7H13V13Z" Fill="#619BF2"/>
+                            <Path x:Name="IconPath" Data="M12 2C6.48 2 2 6.48 2 12C2 17.52 6.48 22 12 22C17.52 22 22 17.52 22 12C22 6.48 17.52 2 12 2ZM13 17H11V15H13V17ZM13 13H11V7H13V13Z" Fill="#60A5FA"/>
                         </Canvas>
                     </Viewbox>
                 </Border>
                 <StackPanel Grid.Column="1" VerticalAlignment="Center">
-                    <TextBlock x:Name="TxtTitle" Text="notification" FontSize="13.5" FontWeight="Bold" Foreground="#FFFFFF"/>
+                    <TextBlock x:Name="TxtTitle" Text="notification" FontSize="15" FontWeight="Bold"
+                               Foreground="{StaticResource StudioText}"/>
                 </StackPanel>
             </Grid>
 
@@ -32,15 +35,18 @@
             <TextBlock x:Name="TxtMessage"
                        Text="message text goes here."
                        FontSize="12"
-                       Foreground="#CBD5E1"
+                       Foreground="{StaticResource StudioTextSoft}"
                        TextWrapping="Wrap"
                        LineHeight="18"
-                       Margin="40,0,0,0"/>
+                       Margin="42,0,0,0"/>
 
             <!-- Buttons Row -->
-            <StackPanel x:Name="PanelButtons" Orientation="Horizontal" HorizontalAlignment="Right" Spacing="8" Margin="0,6,0,0">
-                <Button x:Name="BtnCancel" Content="cancel" Width="85" HorizontalContentAlignment="Center" Click="BtnCancel_Click" IsVisible="False"/>
-                <Button x:Name="BtnOk" Content="ok" Classes="primary" Width="85" HorizontalContentAlignment="Center" Click="BtnOk_Click"/>
+            <Border Height="1" Background="{StaticResource StudioBorder}"/>
+            <StackPanel x:Name="PanelButtons" Orientation="Horizontal" HorizontalAlignment="Right" Spacing="8">
+                <Button x:Name="BtnCancel" Content="cancel" MinWidth="86" Height="34"
+                        Click="BtnCancel_Click" IsVisible="False"/>
+                <Button x:Name="BtnOk" Content="ok" Classes="primary" MinWidth="86" Height="34"
+                        Click="BtnOk_Click"/>
             </StackPanel>
 
         </StackPanel>

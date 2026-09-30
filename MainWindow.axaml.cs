@@ -4,10 +4,12 @@ using System.Diagnostics;
 using System.IO;
 using System.Linq;
 using System.Security.Cryptography;
+using System.Threading;
 using System.Threading.Tasks;
 using Avalonia.Controls;
 using Avalonia.Interactivity;
 using Avalonia.Media;
+using Avalonia.Media.Imaging;
 using Avalonia.Platform.Storage;
 using Avalonia.Threading;
 using DeadlockVmdlCompiler.Models;
@@ -23,6 +25,10 @@ public partial class MainWindow : Window
     private bool _isProcessing;
     private bool _isInitializing = true;
     private bool _isUpdatingSelection = false;
+    private List<HeroPresetChoice> _presetChoices = new();
+    private Dictionary<string, Bitmap> _presetPortraits = new(StringComparer.OrdinalIgnoreCase);
+    private readonly SemaphoreSlim _portraitLoadGate = new(1, 1);
+    private string? _portraitSource;
     private int _logLineCount = 0;
     private readonly System.Text.StringBuilder _logBuffer = new();
     private sealed record ProtectedModelState(
@@ -40,7 +46,80 @@ public partial class MainWindow : Window
     {
         InitializeComponent();
         Loaded += MainWindow_Loaded;
-        Closed += (_, _) => ReleaseAllModelProtections();
+        Closed += (_, _) =>
+        {
+            ReleaseAllModelProtections();
+            foreach (var portrait in _presetPortraits.Values)
+                portrait.Dispose();
+        };
+    }
+
+    private void PopulateHeroPresets()
+    {
+        var choices = HeroDatabase.GetVisiblePresets()
+            .Select(pair => new HeroPresetChoice(pair.Key,
+                HeroPresetMatcher.FindKnownHero(pair.Key, pair.Value)))
+            .OrderBy(choice => choice.Hero == null ? 1 : 0)
+            .ThenBy(choice => choice.DisplayName, StringComparer.OrdinalIgnoreCase)
+            .ThenBy(choice => choice.Key, StringComparer.OrdinalIgnoreCase)
+            .ToList();
+        choices.Insert(0, new HeroPresetChoice(string.Empty, isAuto: true));
+        foreach (var choice in choices)
+        {
+            if (choice.Hero != null && _presetPortraits.TryGetValue(choice.Hero.HeroKey, out var portrait))
+                choice.Portrait = portrait;
+        }
+        _presetChoices = choices;
+        CmbHeroPreset.ItemsSource = choices;
+        CmbHeroPreset.SelectedIndex = 0;
+    }
+
+    private async Task LoadPresetPortraitsAsync(string vpkPath)
+    {
+        if (!File.Exists(vpkPath)) return;
+        await _portraitLoadGate.WaitAsync();
+        try
+        {
+            if (_portraitSource?.Equals(vpkPath, StringComparison.OrdinalIgnoreCase) == true &&
+                _presetPortraits.Count == DeadlockHeroCatalog.GetHeroes().Count(hero => hero.IconVpkPath != null))
+                return;
+
+            var pngs = await Task.Run(() => HeroIconLoader.LoadSmallPortraits(
+                vpkPath, DeadlockHeroCatalog.GetHeroes()));
+            if (!IsVisible) return;
+
+            var portraits = new Dictionary<string, Bitmap>(StringComparer.OrdinalIgnoreCase);
+            foreach (var (heroKey, png) in pngs)
+            {
+                try
+                {
+                    using var input = new MemoryStream(png);
+                    portraits[heroKey] = new Bitmap(input);
+                }
+                catch (Exception ex)
+                {
+                    Log($"[ag2 presets] could not display portrait for {heroKey}: {ex.Message}");
+                }
+            }
+            foreach (var choice in _presetChoices)
+                choice.Portrait = choice.Hero != null &&
+                                  portraits.TryGetValue(choice.Hero.HeroKey, out var portrait)
+                    ? portrait : null;
+            foreach (var oldPortrait in _presetPortraits.Values)
+                oldPortrait.Dispose();
+            _presetPortraits = portraits;
+            _portraitSource = vpkPath;
+            if (portraits.Count != DeadlockHeroCatalog.GetHeroes().Count)
+                Log($"[ag2 presets] loaded {portraits.Count} of 38 hero portraits from VPK.");
+        }
+        catch (Exception ex)
+        {
+            Log($"[ag2 presets] hero portraits unavailable: {ex.Message}");
+        }
+        finally
+        {
+            _portraitLoadGate.Release();
+        }
     }
 
     private void UpdateProtectionStatus()
@@ -147,10 +226,7 @@ public partial class MainWindow : Window
             _config = ConfigManager.LoadConfig();
 
             // Populate presets
-            var presets = new List<string> { "(auto-detect hero paths)" };
-            presets.AddRange(HeroDatabase.GetDatabase().Keys.OrderBy(k => k));
-            CmbHeroPreset.ItemsSource = presets;
-            CmbHeroPreset.SelectedIndex = 0;
+            PopulateHeroPresets();
 
             // Apply config to UI
             TxtCsWinPath.Text = _config.CsWinDir ?? string.Empty;
@@ -170,6 +246,10 @@ public partial class MainWindow : Window
 
             // Environment validation on startup
             ValidateEnvironmentOnStartup();
+
+            var deadlockInstall = DeadlockLocator.DetectDeadlockInstallation();
+            if (deadlockInstall.IsValid)
+                _ = LoadPresetPortraitsAsync(deadlockInstall.Pak01VpkPath);
 
             RescanModels(logOutput: false);
 
@@ -494,10 +574,7 @@ public partial class MainWindow : Window
             var db = HeroDatabase.GetDatabase();
             if (string.IsNullOrEmpty(heroName) || !db.TryGetValue(heroName, out var preset))
             {
-                if (CmbHeroPreset.ItemsSource is List<string> presets)
-                {
-                    CmbHeroPreset.SelectedIndex = 0;
-                }
+                CmbHeroPreset.SelectedIndex = 0;
 
                 TxtSkel.Text = string.Empty;
                 TxtGraph.Text = string.Empty;
@@ -509,14 +586,17 @@ public partial class MainWindow : Window
             TxtGraph.Text = preset.Graph ?? string.Empty;
             TxtUiGraph.Text = preset.UiGraph ?? string.Empty;
 
-            if (CmbHeroPreset.ItemsSource is List<string> heroPresets)
+            var match = _presetChoices.FirstOrDefault(choice =>
+                choice.Key.Equals(heroName, StringComparison.OrdinalIgnoreCase));
+            if (match == null)
             {
-                var match = heroPresets.FirstOrDefault(p => p.Equals(heroName, StringComparison.OrdinalIgnoreCase));
-                if (match != null)
-                {
-                    CmbHeroPreset.SelectedItem = match;
-                }
+                var hero = HeroPresetMatcher.FindKnownHero(heroName, preset);
+                if (hero != null)
+                    match = _presetChoices.FirstOrDefault(choice =>
+                        choice.Hero?.HeroKey.Equals(hero.HeroKey, StringComparison.OrdinalIgnoreCase) == true);
             }
+            if (match != null && !ReferenceEquals(CmbHeroPreset.SelectedItem, match))
+                CmbHeroPreset.SelectedItem = match;
         }
         catch { }
     }
@@ -602,17 +682,17 @@ public partial class MainWindow : Window
 
     private void CmbHeroPreset_SelectionChanged(object? sender, SelectionChangedEventArgs e)
     {
-        if (CmbHeroPreset.SelectedItem is string presetName)
+        if (CmbHeroPreset.SelectedItem is HeroPresetChoice choice)
         {
-            if (presetName == "(auto-detect hero paths)")
+            if (choice.IsAuto)
             {
                 var path = GetResolvedTargetPath();
                 if (!string.IsNullOrEmpty(path)) UpdateHeroDetailsFromPath(path);
             }
             else
             {
-                var db = HeroDatabase.GetDatabase();
-                if (db.TryGetValue(presetName, out var preset))
+                var db = HeroDatabase.GetVisiblePresets();
+                if (db.TryGetValue(choice.Key, out var preset))
                 {
                     TxtSkel.Text = preset.Skel ?? string.Empty;
                     TxtGraph.Text = preset.Graph ?? string.Empty;
@@ -684,152 +764,6 @@ public partial class MainWindow : Window
     private void Rescan_Click(object? sender, RoutedEventArgs e)
     {
         RescanModels();
-    }
-
-    private void BtnRestorePresets_Click(object? sender, RoutedEventArgs e)
-    {
-        var (success, msg, count) = HeroDatabase.RestoreOriginalDatabase();
-        if (success)
-        {
-            Log($"[ag2 presets] restored default hero preset database ({count} heroes).");
-            var presets = new List<string> { "(auto-detect hero paths)" };
-            presets.AddRange(HeroDatabase.GetDatabase().Keys.OrderBy(k => k));
-            CmbHeroPreset.ItemsSource = presets;
-
-            var targetPath = GetResolvedTargetPath();
-            if (!string.IsNullOrEmpty(targetPath))
-            {
-                UpdateHeroDetailsFromPath(targetPath);
-            }
-            else
-            {
-                CmbHeroPreset.SelectedIndex = 0;
-            }
-        }
-        else
-        {
-            Log($"[restore error] {msg}");
-        }
-    }
-
-    private async void BtnUpdateVpkPresets_Click(object? sender, RoutedEventArgs e)
-    {
-        if (_isProcessing) return;
-
-        try
-        {
-            _isProcessing = true;
-            Log("locating deadlock vpk files for updated hero paths...");
-
-            string? vpkPath = null;
-
-            // 1. Check auto-detected install
-            var deadlockInfo = DeadlockLocator.DetectDeadlockInstallation();
-            if (deadlockInfo.IsValid && File.Exists(deadlockInfo.Pak01VpkPath))
-            {
-                vpkPath = deadlockInfo.Pak01VpkPath;
-            }
-
-            // 2. Check relative to citadel addons path
-            if (string.IsNullOrEmpty(vpkPath))
-            {
-                var cit = TxtCitadelPath.Text?.Trim();
-                if (!string.IsNullOrEmpty(cit))
-                {
-                    var cands = new[]
-                    {
-                        Path.Combine(cit, "..", "..", "game", "citadel", "pak01_dir.vpk"),
-                        Path.Combine(cit, "..", "game", "citadel", "pak01_dir.vpk"),
-                        Path.Combine(cit, "pak01_dir.vpk")
-                    };
-
-                    foreach (var c in cands)
-                    {
-                        var full = Path.GetFullPath(c);
-                        if (File.Exists(full)) { vpkPath = full; break; }
-                    }
-                }
-            }
-
-            // 3. If still not found, prompt user to select pak01_dir.vpk
-            if (string.IsNullOrEmpty(vpkPath))
-            {
-                var files = await StorageProvider.OpenFilePickerAsync(new FilePickerOpenOptions
-                {
-                    Title = "select deadlock pak01_dir.vpk to scan hero presets",
-                    FileTypeFilter = new[]
-                    {
-                        new FilePickerFileType("deadlock vpk (*.vpk)") { Patterns = new[] { "pak01_dir.vpk", "*.vpk" } }
-                    }
-                });
-
-                if (files.Count > 0)
-                {
-                    vpkPath = files[0].Path.LocalPath;
-                }
-            }
-
-            if (string.IsNullOrWhiteSpace(vpkPath))
-            {
-                Log("[vpk scan cancelled] no VPK was selected.");
-                await DialogService.ShowErrorAsync(this, "VPK required", "Select Deadlock's pak01_dir.vpk to scan hero presets.");
-                return;
-            }
-
-            Log($"scanning vpk: {vpkPath}...");
-            
-            PanelScanProgress.IsVisible = true;
-            PrgScanVpk.Value = 0;
-            LblScanStatus.Text = "starting vpk scan...";
-            TxtGetListsBtn.Text = "scanning...";
-
-            var progress = new Progress<(int Current, int Total, string CurrentModel)>(p =>
-            {
-                Dispatcher.UIThread.Post(() =>
-                {
-                    if (p.Total > 0)
-                    {
-                        PrgScanVpk.Maximum = p.Total;
-                        PrgScanVpk.Value = p.Current;
-                        LblScanStatus.Text = $"scanning ({p.Current}/{p.Total}): {p.CurrentModel}";
-                        TxtGetListsBtn.Text = $"{p.Current}/{p.Total}";
-                    }
-                });
-            });
-
-            var (success, msg, presets) = await VpkHeroScanner.ScanVpkForHeroesAsync(vpkPath, progress);
-            
-            PanelScanProgress.IsVisible = false;
-            TxtGetListsBtn.Text = "get ag2 lists";
-
-            if (success && presets.Count > 0)
-            {
-                Log($"vpk scan complete: updated {presets.Count} hero presets.");
-                var list = new List<string> { "(auto-detect hero paths)" };
-                list.AddRange(HeroDatabase.GetDatabase().Keys.OrderBy(k => k));
-                CmbHeroPreset.ItemsSource = list;
-                CmbHeroPreset.SelectedIndex = 0;
-                await DialogService.ShowInfoAsync(this, "vpk presets updated", $"hero presets updated successfully ({presets.Count} heroes).");
-            }
-            else
-            {
-                Log($"[vpk scan notice] {msg}");
-                await DialogService.ShowErrorAsync(this, "vpk scan notice", msg);
-            }
-        }
-        catch (Exception ex)
-        {
-            PanelScanProgress.IsVisible = false;
-            TxtGetListsBtn.Text = "get ag2 lists";
-            Log($"[vpk scan error] {ex.Message}");
-            await DialogService.ShowErrorAsync(this, "vpk scan error", ex.Message);
-        }
-        finally
-        {
-            _isProcessing = false;
-            PanelScanProgress.IsVisible = false;
-            TxtGetListsBtn.Text = "get ag2 lists";
-        }
     }
 
     private async void BtnSanitizeModelDoc_Click(object? sender, RoutedEventArgs e)
@@ -1020,6 +954,8 @@ public partial class MainWindow : Window
             if (files.Count == 0) return;
             vpkPath = files[0].Path.LocalPath;
         }
+
+        _ = LoadPresetPortraitsAsync(vpkPath);
 
         try
         {
@@ -1241,7 +1177,7 @@ public partial class MainWindow : Window
         {
             _isProcessing = false;
             BtnCompile.IsEnabled = true;
-            TxtCompileBtn.Text = "compile";
+            TxtCompileBtn.Text = "compile model";
         }
     }
 

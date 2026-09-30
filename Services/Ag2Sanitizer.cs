@@ -69,76 +69,8 @@ public static class Ag2Sanitizer
         return content;
     }
 
-    public static string DisableNodeByClass(string content, string className)
-    {
-        var pattern = @"_class\s*=\s*""" + Regex.Escape(className) + @"""";
-        int searchStart = 0;
-
-        while (true)
-        {
-            if (searchStart >= content.Length) break;
-            var match = Regex.Match(content[searchStart..], pattern, RegexOptions.IgnoreCase);
-            if (!match.Success) break;
-
-            int classIdx = searchStart + match.Index;
-
-            int openBrace = -1;
-            for (int i = classIdx - 1; i >= 0; i--)
-            {
-                if (content[i] == '{')
-                {
-                    openBrace = i;
-                    break;
-                }
-                if (content[i] == '}')
-                    break;
-            }
-
-            if (openBrace == -1)
-            {
-                searchStart = classIdx + match.Length;
-                continue;
-            }
-
-            int depth = 0;
-            int closeBrace = -1;
-            for (int i = openBrace; i < content.Length; i++)
-            {
-                if (content[i] == '{') depth++;
-                else if (content[i] == '}')
-                {
-                    depth--;
-                    if (depth == 0)
-                    {
-                        closeBrace = i;
-                        break;
-                    }
-                }
-            }
-
-            if (closeBrace == -1)
-            {
-                searchStart = classIdx + match.Length;
-                continue;
-            }
-
-            var block = content.Substring(openBrace, closeBrace - openBrace + 1);
-
-            // Remove existing disabled = true/false
-            block = Regex.Replace(block, @"^[ \t]*disabled\s*=\s*(true|false)[ \t]*[\r\n]*", "", RegexOptions.IgnoreCase | RegexOptions.Multiline);
-
-            // Insert disabled = true right after _class line
-            block = Regex.Replace(block,
-                @"(_class\s*=\s*""" + Regex.Escape(className) + @""")",
-                "$1\n\t\t\t\tdisabled = true",
-                RegexOptions.IgnoreCase);
-
-            content = content.Remove(openBrace, closeBrace - openBrace + 1).Insert(openBrace, block);
-            searchStart = openBrace + block.Length;
-        }
-
-        return content;
-    }
+    public static string DisableNodeByClass(string content, string className) =>
+        ModelDocAg2Editor.SetNodeDisabled(content, className, disabled: true);
 
     public static (string CleanContent, List<string> Changes) SanitizeVmdlContent(string content, bool disableAnimationList = true)
     {

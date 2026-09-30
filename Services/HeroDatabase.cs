@@ -24,6 +24,21 @@ public static class HeroDatabase
         return _database;
     }
 
+    public static IReadOnlyDictionary<string, HeroPreset> GetVisiblePresets()
+    {
+        var builtIn = LoadBuiltInDatabase();
+        if (builtIn.Count == 0)
+            return GetDatabase();
+
+        var current = GetDatabase();
+        var visible = new Dictionary<string, HeroPreset>(StringComparer.OrdinalIgnoreCase);
+        foreach (var (key, defaultPreset) in builtIn)
+            visible[key] = current.TryGetValue(key, out var updated) && updated != null
+                ? updated : defaultPreset;
+
+        return visible;
+    }
+
     private static Dictionary<string, HeroPreset> LoadDatabase()
     {
         var exeDir = AppDomain.CurrentDomain.BaseDirectory;
@@ -48,14 +63,29 @@ public static class HeroDatabase
                         var dict = new Dictionary<string, HeroPreset>(StringComparer.OrdinalIgnoreCase);
                         foreach (var kv in data)
                             dict[kv.Key] = kv.Value;
-                        return dict;
+                        CorrectLegacyPresets(dict);
+                        return IncludeMissingBuiltInPresets(dict);
                     }
                 }
                 catch { }
             }
         }
 
-        // Try embedded resource
+        return LoadBuiltInDatabase();
+    }
+
+    private static Dictionary<string, HeroPreset> IncludeMissingBuiltInPresets(
+        Dictionary<string, HeroPreset> data)
+    {
+        // New releases must remain available for auto-detection when an older
+        // local database is installed. Keep every user's existing override.
+        foreach (var (key, preset) in LoadBuiltInDatabase())
+            data.TryAdd(key, preset);
+        return data;
+    }
+
+    private static Dictionary<string, HeroPreset> LoadBuiltInDatabase()
+    {
         try
         {
             var assembly = Assembly.GetExecutingAssembly();
@@ -71,6 +101,7 @@ public static class HeroDatabase
                     var dict = new Dictionary<string, HeroPreset>(StringComparer.OrdinalIgnoreCase);
                     foreach (var kv in data)
                         dict[kv.Key] = kv.Value;
+                    CorrectLegacyPresets(dict);
                     return dict;
                 }
             }
@@ -82,18 +113,49 @@ public static class HeroDatabase
 
     public static string SaveDatabase(Dictionary<string, HeroPreset> data)
     {
+        CorrectLegacyPresets(data);
         var json = JsonSerializer.Serialize(data, new JsonSerializerOptions { WriteIndented = true });
         var targetFile = GetUserDatabasePath();
         Directory.CreateDirectory(Path.GetDirectoryName(targetFile)!);
         File.WriteAllText(targetFile, json);
 
-        _database = new Dictionary<string, HeroPreset>(data, StringComparer.OrdinalIgnoreCase);
+        _database = IncludeMissingBuiltInPresets(
+            new Dictionary<string, HeroPreset>(data, StringComparer.OrdinalIgnoreCase));
         return targetFile;
     }
 
     public static void ReloadDatabase()
     {
         _database = LoadDatabase();
+    }
+
+    private static void CorrectLegacyPresets(Dictionary<string, HeroPreset> data)
+    {
+        if (data.TryGetValue("seven", out var seven) &&
+            data.TryGetValue("gigawatt_prisoner", out var gigawatt) &&
+            string.Equals(seven.Skel, "models/heroes_wip/frank/frank.vnmskel", StringComparison.OrdinalIgnoreCase) &&
+            seven.Graph?.EndsWith("+frank.vnmgraph", StringComparison.OrdinalIgnoreCase) == true &&
+            string.Equals(gigawatt.Skel, "models/heroes_staging/gigawatt_prisoner/gigawatt_prisoner.vnmskel", StringComparison.OrdinalIgnoreCase) &&
+            gigawatt.Graph?.EndsWith("+gigawatt.vnmgraph", StringComparison.OrdinalIgnoreCase) == true &&
+            gigawatt.UiGraph?.EndsWith("+gigawatt.vnmgraph", StringComparison.OrdinalIgnoreCase) == true)
+        {
+            data["seven"] = new HeroPreset
+            {
+                Skel = gigawatt.Skel,
+                Graph = gigawatt.Graph,
+                UiGraph = gigawatt.UiGraph
+            };
+        }
+
+        if (data.TryGetValue("familiar", out var familiar) &&
+            data.TryGetValue("familiar_wip", out var familiarWip) &&
+            string.Equals(familiar.Skel, familiarWip.Skel, StringComparison.OrdinalIgnoreCase) &&
+            string.Equals(familiar.Graph, familiarWip.Graph, StringComparison.OrdinalIgnoreCase) &&
+            familiarWip.UiGraph?.EndsWith("+familiar.vnmgraph", StringComparison.OrdinalIgnoreCase) == true &&
+            familiar.UiGraph?.EndsWith("+frank.vnmgraph", StringComparison.OrdinalIgnoreCase) == true)
+        {
+            familiar.UiGraph = familiarWip.UiGraph;
+        }
     }
 
     public static (bool Success, string Message, int Count) RestoreOriginalDatabase()
@@ -136,6 +198,7 @@ public static class HeroDatabase
             }
 
             var dict = new Dictionary<string, HeroPreset>(data, StringComparer.OrdinalIgnoreCase);
+            CorrectLegacyPresets(dict);
             _database = dict;
             SaveDatabase(dict);
 
