@@ -30,6 +30,14 @@ public static class DmxModelLoader
         try { DebugLogger?.Invoke(msg); } catch { }
     }
 
+    private static string GetModelCacheKey(string fullPath, string? citadelDir)
+    {
+        var normalizedCitadelDir = string.IsNullOrWhiteSpace(citadelDir)
+            ? string.Empty
+            : Path.GetFullPath(citadelDir).TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
+        return fullPath + "\0" + normalizedCitadelDir;
+    }
+
     public static async Task<SimpleMesh3D?> LoadModelFromVmdlAsync(string vmdlPath, string? citadelDir = null)
     {
         if (string.IsNullOrWhiteSpace(vmdlPath) || !File.Exists(vmdlPath))
@@ -39,7 +47,8 @@ public static class DmxModelLoader
         }
 
         var fullPath = Path.GetFullPath(vmdlPath);
-        if (_modelCache.TryGetValue(fullPath, out var cached) && cached != null && cached.Vertices.Count > 0)
+        var cacheKey = GetModelCacheKey(fullPath, citadelDir);
+        if (_modelCache.TryGetValue(cacheKey, out var cached) && cached != null && cached.Vertices.Count > 0)
         {
             LogDebug("[3D Loader] Model loaded from cache: " + cached.MeshName + " (" + cached.Vertices.Count + " verts)");
             return cached;
@@ -50,7 +59,7 @@ public static class DmxModelLoader
             var res = LoadModelFromVmdlInternal(fullPath, citadelDir);
             if (res != null && res.Vertices.Count > 0)
             {
-                _modelCache[fullPath] = res;
+                _modelCache[cacheKey] = res;
             }
             return res;
         });
