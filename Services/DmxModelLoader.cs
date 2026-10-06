@@ -213,6 +213,25 @@ public static class DmxModelLoader
             int fallbackCol = unchecked((int)0xFFFFFFFF);
             var tint = Vector3.One;
 
+            // Some materials store TextureColor as an inline vector instead of a
+            // texture path. Preserve that authored color for fallback rendering.
+            var textureColorMatch = Regex.Match(text,
+                @"""?TextureColor\d*""?\s*""\[([\d.+\-eE\s]+)\]""", RegexOptions.IgnoreCase);
+            if (textureColorMatch.Success)
+            {
+                var nums = Regex.Split(textureColorMatch.Groups[1].Value.Trim(), @"\s+");
+                if (nums.Length >= 3 &&
+                    float.TryParse(nums[0], System.Globalization.NumberStyles.Float, System.Globalization.CultureInfo.InvariantCulture, out float r) &&
+                    float.TryParse(nums[1], System.Globalization.NumberStyles.Float, System.Globalization.CultureInfo.InvariantCulture, out float g) &&
+                    float.TryParse(nums[2], System.Globalization.NumberStyles.Float, System.Globalization.CultureInfo.InvariantCulture, out float b))
+                {
+                    byte br = (byte)Math.Clamp((int)(r * 255), 0, 255);
+                    byte bg = (byte)Math.Clamp((int)(g * 255), 0, 255);
+                    byte bb = (byte)Math.Clamp((int)(b * 255), 0, 255);
+                    fallbackCol = unchecked((int)(0xFF000000 | ((uint)br << 16) | ((uint)bg << 8) | bb));
+                }
+            }
+
             var colorMatch = Regex.Match(text, @"""?g_vColorTint\d*""?\s*""\[([\d\.\s]+)\]""", RegexOptions.IgnoreCase);
             if (colorMatch.Success)
             {
