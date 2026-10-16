@@ -360,6 +360,15 @@ try
     Check(oldConfig.ChkDisableAnimList && oldConfig.ChkAutoDetectAnims &&
           !contributorConfig.ChkDisableAnimList && !contributorConfig.ChkAutoDetectAnims,
         "Settings from either version lose their animation mode during migration.");
+    var materialConfig = JsonSerializer.Deserialize<AppConfig>("{\"chk_skip_material_compilation\":true}")!;
+    Check(materialConfig.ChkSkipMaterialCompilation &&
+          !new AppConfig().ChkSkipMaterialCompilation,
+        "Material compilation setting does not preserve the opt-in default.");
+    Check(VmdlPipeline.BuildResourceCompilerArguments("model.vmdl", "game", false) ==
+          "-f -i \"model.vmdl\" -game \"game\"" &&
+          VmdlPipeline.BuildResourceCompilerArguments("model.vmdl", "game", true) ==
+          "-f -skiptype vmat,vtex -i \"model.vmdl\" -game \"game\"",
+        "Material compilation toggle did not produce the expected resourcecompiler arguments.");
     Console.WriteLine("Combined manual and automatic animation checks passed.");
 
     var gameDir = Path.Combine(root, "game");

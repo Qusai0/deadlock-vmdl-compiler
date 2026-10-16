@@ -15,6 +15,95 @@ public static class VmdlPipeline
     public const string ModelDoc41Header = "<!-- kv3 encoding:text:version{e21c7f3c-8a33-41c5-9977-a76d3a32aa0d} format:modeldoc41:version{12fc9d44-453a-4ae4-b4d9-7e2ac0bbd4e0} -->";
     public const string DefaultCsWinDir = @"A:\modding\CSWin64";
 
+    private sealed class GameInfoMaterialGuard : IDisposable
+    {
+        private const string SettingName = "content_consider_missing_materials_fatal";
+        private readonly string _path;
+        private readonly byte[] _originalBytes;
+        private readonly Action<string>? _onLog;
+        private bool _disposed;
+
+        private GameInfoMaterialGuard(string path, byte[] originalBytes, Action<string>? onLog)
+        {
+            _path = path;
+            _originalBytes = originalBytes;
+            _onLog = onLog;
+        }
+
+        public static GameInfoMaterialGuard Disable(string cswinDir, Action<string>? onLog)
+        {
+            var path = FindGameInfoPath(cswinDir);
+            if (path == null)
+                throw new FileNotFoundException(
+                    $"Could not find {SettingName} in the CSWin64 gameinfo files.");
+
+            var originalBytes = File.ReadAllBytes(path);
+            var content = File.ReadAllText(path);
+            var pattern = new Regex(
+                @"^[ \t]*" + Regex.Escape(SettingName) +
+                @"\s*\{[^{}]*\}[ \t]*(?:\r?\n)?",
+                RegexOptions.Multiline | RegexOptions.Singleline);
+            var updated = pattern.Replace(content, string.Empty, 1);
+            if (updated == content)
+                throw new InvalidDataException(
+                    $"The CSWin64 gameinfo file contains {SettingName}, but its block could not be edited: {path}");
+
+            File.WriteAllText(path, updated);
+            onLog?.Invoke($"[gameinfo] temporarily disabled {SettingName}: {path}");
+            return new GameInfoMaterialGuard(path, originalBytes, onLog);
+        }
+
+        private static string? FindGameInfoPath(string cswinDir)
+        {
+            var gameRoot = Path.Combine(cswinDir, "game");
+            if (!Directory.Exists(gameRoot)) return null;
+
+            var candidates = new List<string>();
+            foreach (var folder in new[] { "csgo_core", "csgo", "csgo_imported" })
+            {
+                var preferred = Path.Combine(gameRoot, folder, "gameinfo.gi");
+                if (File.Exists(preferred)) candidates.Add(preferred);
+            }
+
+            try
+            {
+                candidates.AddRange(Directory.EnumerateFiles(
+                    gameRoot, "gameinfo.gi", SearchOption.AllDirectories));
+            }
+            catch (IOException) { }
+            catch (UnauthorizedAccessException) { }
+
+            foreach (var candidate in candidates.Distinct(StringComparer.OrdinalIgnoreCase))
+            {
+                try
+                {
+                    if (File.ReadAllText(candidate).Contains(SettingName, StringComparison.Ordinal))
+                        return candidate;
+                }
+                catch (IOException) { }
+                catch (UnauthorizedAccessException) { }
+            }
+
+            return null;
+        }
+
+        public void Dispose()
+        {
+            if (_disposed) return;
+            _disposed = true;
+            try
+            {
+                File.WriteAllBytes(_path, _originalBytes);
+                _onLog?.Invoke($"[gameinfo] restored {SettingName}: {_path}");
+            }
+            catch (Exception ex)
+            {
+                _onLog?.Invoke($"[gameinfo error] could not restore {_path}: {ex.Message}");
+                throw new IOException($"Could not restore the original CSWin64 gameinfo file: {_path}", ex);
+            }
+        }
+    }
+
     public static bool IsValidCsWinDir(string? path)
     {
         if (string.IsNullOrWhiteSpace(path) || !Directory.Exists(path)) return false;
@@ -275,7 +364,8 @@ public static class VmdlPipeline
         Action<string>? beforeDeploy = null,
         Action<string, string>? afterDeploy = null,
         bool autoDetectAnims = true,
-        IReadOnlyDictionary<string, string>? expectedNamedGraphs = null)
+        IReadOnlyDictionary<string, string>? expectedNamedGraphs = null,
+        bool skipMaterialCompilation = false)
     {
         var cfg = ConfigManager.LoadConfig();
         var useCsWinDir = !string.IsNullOrWhiteSpace(cswinDir) ? cswinDir : (!string.IsNullOrWhiteSpace(cfg.CsWinDir) ? cfg.CsWinDir : DefaultCsWinDir);
@@ -297,6 +387,20 @@ public static class VmdlPipeline
             }
         }
 
+        GameInfoMaterialGuard? gameInfoGuard = null;
+        if (skipMaterialCompilation)
+        {
+            try
+            {
+                gameInfoGuard = GameInfoMaterialGuard.Disable(useCsWinDir, onLog);
+            }
+            catch (Exception ex)
+            {
+                return (false, $"Could not temporarily disable missing-material failures in CSWin64 gameinfo: {ex.Message}");
+            }
+        }
+        using var materialGuard = gameInfoGuard;
+
         var (container, addonName, subpath) = ParseCsdkPath(csdk12VmdlPath, useCitadelDir);
 
         var csWinVmdlPath = Path.Combine(useCsWinDir, "content", "csgo_addons", addonName, subpath);
@@ -311,7 +415,9 @@ public static class VmdlPipeline
         var csWinAddonRoot = Path.Combine(useCsWinDir, "content", "csgo_addons", addonName);
         Directory.CreateDirectory(csWinVmdlDir);
 
-        // 1. Sync mesh/model files (.dmx, .fbx, .smd, .obj, .vmat, .png, .vanim) to CSWin64 so resourcecompiler finds them
+        // 1. Sync model, material, texture, and animation sources to CSWin64 so
+        // the compiler can resolve the authored paths. Material/texture
+        // recompilation can be disabled independently with -skiptype below.
         if (!string.IsNullOrEmpty(csdkVmdlDir) && Directory.Exists(csdkVmdlDir))
         {
             progress?.Report(new CompileProgress(2, 5, 25, "[2/5] syncing assets", "scanning model assets..."));
@@ -381,10 +487,12 @@ public static class VmdlPipeline
         if (File.Exists(csWinCompiledVmdlc))
             File.Delete(csWinCompiledVmdlc);
 
+        var compilerArguments = BuildResourceCompilerArguments(csWinVmdlPath, csWinGameDir,
+            skipMaterialCompilation);
         var psi = new ProcessStartInfo
         {
             FileName = rcExe,
-            Arguments = $"-f -i \"{csWinVmdlPath}\" -game \"{csWinGameDir}\"",
+            Arguments = compilerArguments,
             RedirectStandardOutput = true,
             RedirectStandardError = true,
             UseShellExecute = false,
@@ -392,7 +500,9 @@ public static class VmdlPipeline
         };
 
         progress?.Report(new CompileProgress(4, 5, 60, "[4/5] compiling model", "resourcecompiler.exe"));
-        onLog?.Invoke($"[compiler] starting: resourcecompiler.exe -f -i \"{Path.GetFileName(csWinVmdlPath)}\"");
+        onLog?.Invoke(skipMaterialCompilation
+            ? "[compiler] starting: resourcecompiler.exe with material/texture compilation disabled (-skiptype vmat,vtex)"
+            : $"[compiler] starting: resourcecompiler.exe -f -i \"{Path.GetFileName(csWinVmdlPath)}\"");
 
         var outputLines = new List<string>();
         var errorLines = new List<string>();
@@ -558,6 +668,13 @@ public static class VmdlPipeline
         }
     }
 
+    public static string BuildResourceCompilerArguments(string vmdlPath, string gamePath,
+        bool skipMaterialCompilation)
+    {
+        var skipTypes = skipMaterialCompilation ? " -skiptype vmat,vtex" : string.Empty;
+        return $"-f{skipTypes} -i \"{vmdlPath}\" -game \"{gamePath}\"";
+    }
+
     public static async Task<(bool Success, string Message)> ProcessVmdlFileAsync(
         string filepath,
         string? skelPath = null,
@@ -578,7 +695,8 @@ public static class VmdlPipeline
         Action<string>? beforeDeploy = null,
         Action<string, string>? afterDeploy = null,
         bool autoDetectAnims = true,
-        IReadOnlyDictionary<string, string>? namedGraphs = null)
+        IReadOnlyDictionary<string, string>? namedGraphs = null,
+        bool skipMaterialCompilation = false)
     {
         filepath = Path.GetFullPath(filepath);
         if (!File.Exists(filepath))
@@ -633,6 +751,7 @@ public static class VmdlPipeline
                 citadelAddonsDir: citadelAddonsDir,
                 disableAnimationList: disableAnimationList,
                 autoDetectAnims: autoDetectAnims,
+                skipMaterialCompilation: skipMaterialCompilation,
                 progress: progress,
                 onLog: onLog,
                 expectedSkelPath: addSkel ? useSkel : null,

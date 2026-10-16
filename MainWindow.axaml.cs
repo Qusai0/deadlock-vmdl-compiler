@@ -28,6 +28,7 @@ public partial class MainWindow : Window
     private bool _isApplyingPreset;
     private IReadOnlyDictionary<string, string>? _selectedNamedGraphs;
     private List<HeroPresetChoice> _presetChoices = new();
+    private List<NpcPresetChoice> _npcPresetChoices = new();
     private Dictionary<string, Bitmap> _presetPortraits = new(StringComparer.OrdinalIgnoreCase);
     private readonly SemaphoreSlim _portraitLoadGate = new(1, 1);
     private string? _portraitSource;
@@ -61,9 +62,10 @@ public partial class MainWindow : Window
     {
         var previousKey = (CmbHeroPreset.SelectedItem as HeroPresetChoice)?.Key;
         var choices = HeroDatabase.GetVisiblePresets()
+            .Where(pair => !pair.Value.NamedGraphs.ContainsKey("Neutrals"))
             .Select(pair => new HeroPresetChoice(pair.Key,
                 HeroPresetMatcher.FindKnownHero(pair.Key, pair.Value),
-                detail: pair.Value.NamedGraphs.ContainsKey("Neutrals") ? "neutral AG2 preset" : null))
+                detail: null))
             .OrderBy(choice => choice.Hero == null ? 1 : 0)
             .ThenBy(choice => choice.DisplayName, StringComparer.OrdinalIgnoreCase)
             .ThenBy(choice => choice.Key, StringComparer.OrdinalIgnoreCase)
@@ -81,6 +83,71 @@ public partial class MainWindow : Window
         LblHeroPathsSource.Text = $"{(source == null ? "built-in list" : Path.GetFileName(source))} · {choices.Count - 1} presets";
         ToolTip.SetTip(LblHeroPathsSource, source ?? HeroDatabase.CustomLoadError ?? "Presets bundled inside this EXE.");
         BtnDefaultHeroPaths.IsVisible = source != null || !string.IsNullOrWhiteSpace(_config.HeroPathsFile);
+    }
+
+    private void PopulateNpcPresets(IReadOnlyList<NpcPreset> scannedPresets)
+    {
+        var previousKey = (CmbNpcPreset.SelectedItem as NpcPresetChoice)?.Key;
+        var choices = new List<NpcPresetChoice>
+        {
+            new NpcPresetChoice(string.Empty, "auto-detect NPC paths", "from selected model", isAuto: true)
+        };
+
+        var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        foreach (var (key, preset) in HeroDatabase.GetVisiblePresets()
+                     .Where(pair => pair.Value.NamedGraphs.ContainsKey("Neutrals"))
+                     .OrderBy(pair => pair.Key, StringComparer.OrdinalIgnoreCase))
+        {
+            var signature = PresetSignature(preset);
+            if (!seen.Add(signature)) continue;
+            choices.Add(new NpcPresetChoice(
+                key,
+                key,
+                "neutral AG2 preset",
+                preset));
+        }
+
+        foreach (var npc in scannedPresets.OrderBy(item => item.DisplayName, StringComparer.OrdinalIgnoreCase))
+        {
+            var signature = PresetSignature(npc.Preset);
+            if (npc.IsNeutral && seen.Contains(signature)) continue;
+            choices.Add(new NpcPresetChoice(
+                npc.Key,
+                npc.DisplayName,
+                npc.IsNeutral ? "neutral model from pak01_dir.vpk" : npc.SourcePath,
+                npc.Preset,
+                sourcePath: npc.SourcePath));
+            if (npc.IsNeutral) seen.Add(signature);
+        }
+
+        _npcPresetChoices = choices;
+        CmbNpcPreset.ItemsSource = choices;
+        CmbNpcPreset.SelectedItem = choices.FirstOrDefault(choice =>
+            choice.Key.Equals(previousKey, StringComparison.OrdinalIgnoreCase)) ?? choices[0];
+        LblNpcPresetStatus.Text = $"{Math.Max(0, choices.Count - 1)} NPC/neutral presets";
+    }
+
+    private static string PresetSignature(HeroPreset preset) =>
+        string.Join("\n", new[] { preset.Skel, preset.Graph, preset.UiGraph }
+            .Concat(preset.NamedGraphs.OrderBy(pair => pair.Key, StringComparer.OrdinalIgnoreCase)
+                .Select(pair => pair.Key + "=" + pair.Value)));
+
+    private async Task LoadNpcPresetsAsync(string vpkPath)
+    {
+        try
+        {
+            LblNpcPresetStatus.Text = "scanning pak01_dir.vpk...";
+            var result = await VpkHeroScanner.ScanVpkForNpcsAsync(vpkPath);
+            if (!IsVisible) return;
+
+            PopulateNpcPresets(result.Presets);
+            Log($"[npc presets] {result.Message}");
+        }
+        catch (Exception ex)
+        {
+            LblNpcPresetStatus.Text = "NPC scan failed";
+            Log($"[npc presets] scan failed: {ex.Message}");
+        }
     }
 
     private void ApplyPresetPaths(HeroPreset? preset)
@@ -280,6 +347,7 @@ public partial class MainWindow : Window
             ChkUiGraph.IsChecked = _config.ChkUiGraph;
             ChkDisableAnimList.IsChecked = _config.ChkDisableAnimList;
             ChkAutoDetectAnims.IsChecked = _config.ChkAutoDetectAnims;
+            ChkSkipMaterialCompilation.IsChecked = _config.ChkSkipMaterialCompilation;
 
             ChkRevert.IsCheckedChanged += (_, _) => SaveConfig();
             ChkSkel.IsCheckedChanged += (_, _) => SaveConfig();
@@ -287,13 +355,22 @@ public partial class MainWindow : Window
             ChkUiGraph.IsCheckedChanged += (_, _) => SaveConfig();
             ChkDisableAnimList.IsCheckedChanged += (_, _) => SaveConfig();
             ChkAutoDetectAnims.IsCheckedChanged += (_, _) => SaveConfig();
+            ChkSkipMaterialCompilation.IsCheckedChanged += (_, _) => SaveConfig();
 
             // Environment validation on startup
             ValidateEnvironmentOnStartup();
 
             var deadlockInstall = DeadlockLocator.DetectDeadlockInstallation();
             if (deadlockInstall.IsValid)
+            {
                 _ = LoadPresetPortraitsAsync(deadlockInstall.Pak01VpkPath);
+                _ = LoadNpcPresetsAsync(deadlockInstall.Pak01VpkPath);
+            }
+            else
+            {
+                PopulateNpcPresets(Array.Empty<NpcPreset>());
+                LblNpcPresetStatus.Text = "Deadlock VPK not detected";
+            }
 
             RescanModels(logOutput: false);
 
@@ -614,6 +691,9 @@ public partial class MainWindow : Window
     {
         try
         {
+            if (TrySelectNpcPresetForPath(vmdlPath))
+                return;
+
             var heroName = VmdlPipeline.DetectHeroFromPath(vmdlPath);
             var db = HeroDatabase.GetDatabase();
             if (string.IsNullOrEmpty(heroName) || !db.TryGetValue(heroName, out var preset))
@@ -641,6 +721,35 @@ public partial class MainWindow : Window
         catch { }
     }
 
+    private bool TrySelectNpcPresetForPath(string vmdlPath)
+    {
+        if (_npcPresetChoices.Count == 0) return false;
+
+        var detectedKey = VmdlPipeline.DetectHeroFromPath(vmdlPath);
+        var match = !string.IsNullOrWhiteSpace(detectedKey)
+            ? _npcPresetChoices.FirstOrDefault(choice =>
+                choice.Key.Equals(detectedKey, StringComparison.OrdinalIgnoreCase))
+            : null;
+
+        if (match == null)
+        {
+            var (_, _, subpath) = VmdlPipeline.ParseCsdkPath(
+                vmdlPath, TxtCitadelPath.Text?.Trim());
+            var sourcePath = subpath.Replace('\\', '/');
+            if (sourcePath.EndsWith(".vmdl", StringComparison.OrdinalIgnoreCase))
+                sourcePath += "_c";
+            match = _npcPresetChoices.FirstOrDefault(choice =>
+                !string.IsNullOrWhiteSpace(choice.SourcePath) &&
+                choice.SourcePath.Equals(sourcePath, StringComparison.OrdinalIgnoreCase));
+        }
+
+        if (match?.Preset == null) return false;
+
+        CmbNpcPreset.SelectedItem = match;
+        ApplyPresetPaths(match.Preset);
+        return true;
+    }
+
     private void SaveConfig()
     {
         if (_isInitializing || _isApplyingPreset) return;
@@ -654,6 +763,7 @@ public partial class MainWindow : Window
         if (ChkUiGraph.IsEnabled) _config.ChkUiGraph = ChkUiGraph.IsChecked == true;
         _config.ChkDisableAnimList = ChkDisableAnimList.IsChecked == true;
         _config.ChkAutoDetectAnims = ChkAutoDetectAnims.IsChecked == true;
+        _config.ChkSkipMaterialCompilation = ChkSkipMaterialCompilation.IsChecked == true;
 
         if (!ConfigManager.SaveConfig(_config))
         {
@@ -723,6 +833,8 @@ public partial class MainWindow : Window
 
     private void CmbHeroPreset_SelectionChanged(object? sender, SelectionChangedEventArgs e)
     {
+        if (_isApplyingPreset) return;
+
         if (CmbHeroPreset.SelectedItem is HeroPresetChoice choice)
         {
             if (choice.IsAuto)
@@ -740,6 +852,44 @@ public partial class MainWindow : Window
                 }
             }
         }
+    }
+
+    private void CmbNpcPreset_SelectionChanged(object? sender, SelectionChangedEventArgs e)
+    {
+        if (_isApplyingPreset) return;
+        if (CmbNpcPreset.SelectedItem is not NpcPresetChoice choice) return;
+
+        if (choice.IsAuto)
+        {
+            var path = GetResolvedTargetPath();
+            if (!string.IsNullOrEmpty(path) && !TrySelectNpcPresetForPath(path))
+                ApplyPresetPaths(null);
+            return;
+        }
+
+        if (choice.Preset != null)
+        {
+            CmbHeroPreset.SelectedIndex = 0;
+            ApplyPresetPaths(choice.Preset);
+        }
+    }
+
+    private async void BtnScanNpcPresets_Click(object? sender, RoutedEventArgs e)
+    {
+        var files = await StorageProvider.OpenFilePickerAsync(new FilePickerOpenOptions
+        {
+            Title = "select Deadlock pak01_dir.vpk",
+            AllowMultiple = false,
+            FileTypeFilter = new[]
+            {
+                new FilePickerFileType("Deadlock VPK (*.vpk)")
+                {
+                    Patterns = new[] { "pak01_dir.vpk", "*.vpk" }
+                }
+            }
+        });
+        if (files.Count > 0)
+            await LoadNpcPresetsAsync(files[0].Path.LocalPath);
     }
 
     private async void BrowseCsWin_Click(object? sender, RoutedEventArgs e)
@@ -894,8 +1044,17 @@ public partial class MainWindow : Window
                 return false;
             }
 
+            // Prefer Deadlock's live game addon directory for the VPK save dialog.
+            // Fall back to the compiled CSDK addon when Steam detection is unavailable.
+            var deadlockInfo = DeadlockLocator.DetectDeadlockInstallation();
+            var deadlockAddonsDir = deadlockInfo.IsValid
+                ? Path.Combine(Path.GetDirectoryName(deadlockInfo.Pak01VpkPath) ?? string.Empty, "addons")
+                : string.Empty;
+            var suggestedDirectory = Directory.Exists(deadlockAddonsDir)
+                ? deadlockAddonsDir : gameAddonDir;
+
             // Let user choose destination path & filename
-            var suggestedStartLocation = await StorageProvider.TryGetFolderFromPathAsync(gameAddonDir);
+            var suggestedStartLocation = await StorageProvider.TryGetFolderFromPathAsync(suggestedDirectory);
             var saveFile = await StorageProvider.SaveFilePickerAsync(new FilePickerSaveOptions
             {
                 Title = "save addon vpk file",
@@ -1161,6 +1320,7 @@ public partial class MainWindow : Window
                 citadelAddonsDir: citadelDir,
                 disableAnimationList: ChkDisableAnimList.IsChecked == true,
                 autoDetectAnims: ChkAutoDetectAnims.IsChecked == true,
+                skipMaterialCompilation: ChkSkipMaterialCompilation.IsChecked == true,
                 namedGraphs: namedGraphs,
                 progress: progress,
                 onLog: Log,

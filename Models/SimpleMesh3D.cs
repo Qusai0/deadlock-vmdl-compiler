@@ -11,6 +11,8 @@ public class MeshTexture
     public int Height { get; set; }
     public int[] Pixels { get; set; } = Array.Empty<int>();
     public int FallbackColor { get; set; } = unchecked((int)0xFF94A3B8);
+    public Vector3 Tint { get; set; } = Vector3.One;
+    public bool AlphaTest { get; set; }
 
     public int Sample(float u, float v)
     {

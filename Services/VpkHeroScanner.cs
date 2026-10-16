@@ -33,23 +33,7 @@ public static class VpkHeroScanner
         if (string.IsNullOrWhiteSpace(targetPath))
             return (false, "Target path is empty.", new());
 
-        var resolvedPath = Path.GetFullPath(targetPath);
-
-        if (Directory.Exists(resolvedPath))
-        {
-            var candVpk = Path.Combine(resolvedPath, "pak01_dir.vpk");
-            if (File.Exists(candVpk)) resolvedPath = candVpk;
-            else
-            {
-                var candCitadelVpk = Path.Combine(resolvedPath, "game", "citadel", "pak01_dir.vpk");
-                if (File.Exists(candCitadelVpk)) resolvedPath = candCitadelVpk;
-                else
-                {
-                    var candCitadel2 = Path.Combine(resolvedPath, "citadel", "pak01_dir.vpk");
-                    if (File.Exists(candCitadel2)) resolvedPath = candCitadel2;
-                }
-            }
-        }
+        var resolvedPath = ResolveVpkPath(targetPath);
 
         var results = new Dictionary<string, HeroPreset>(StringComparer.OrdinalIgnoreCase);
 
@@ -167,6 +151,98 @@ public static class VpkHeroScanner
         });
     }
 
+    public static async Task<(bool Success, string Message, List<NpcPreset> Presets)> ScanVpkForNpcsAsync(
+        string targetPath,
+        IProgress<(int Current, int Total, string CurrentModel)>? progress = null)
+    {
+        if (string.IsNullOrWhiteSpace(targetPath))
+            return (false, "Target path is empty.", new());
+
+        var resolvedPath = ResolveVpkPath(targetPath);
+        return await Task.Run(() =>
+        {
+            try
+            {
+                if (!File.Exists(resolvedPath) ||
+                    !resolvedPath.EndsWith(".vpk", StringComparison.OrdinalIgnoreCase))
+                    return (false, $"File or folder not found: {resolvedPath}", new List<NpcPreset>());
+
+                var entries = ReadVpkDirectory(resolvedPath)
+                    .Where(entry => entry.Extension.Equals("vmdl_c", StringComparison.OrdinalIgnoreCase) &&
+                    entry.Directory.StartsWith("models/npc/", StringComparison.OrdinalIgnoreCase))
+                    .ToList();
+                if (entries.Count == 0)
+                    return (false, "No NPC models were found under models/npc in the selected VPK.", new List<NpcPreset>());
+
+                var vpkBaseDir = Path.GetDirectoryName(resolvedPath) ?? string.Empty;
+                var vpkBaseName = Path.GetFileNameWithoutExtension(resolvedPath);
+                if (vpkBaseName.EndsWith("_dir", StringComparison.OrdinalIgnoreCase))
+                    vpkBaseName = vpkBaseName[..^4];
+
+                var results = new Dictionary<string, NpcPreset>(StringComparer.OrdinalIgnoreCase);
+                var total = entries.Count;
+                var current = 0;
+                foreach (var entry in entries)
+                {
+                    current++;
+                    var modelPath = $"{entry.Directory}/{entry.FileName}.{entry.Extension}";
+                    progress?.Report((current, total, modelPath));
+
+                    try
+                    {
+                        var bytes = ExtractVpkEntryBytes(entry, resolvedPath, vpkBaseDir, vpkBaseName);
+                        if (bytes == null || bytes.Length == 0) continue;
+
+                        using var resource = new Resource();
+                        using var stream = new MemoryStream(bytes);
+                        resource.Read(stream);
+
+                        var (hasAg2, preset, _) = ExtractAg2FromResource(
+                            resource, entry.Directory, entry.FileName);
+                        if (!hasAg2 || preset == null) continue;
+
+                        var display = modelPath.StartsWith("models/npc/", StringComparison.OrdinalIgnoreCase)
+                            ? modelPath["models/npc/".Length..]
+                            : modelPath;
+                        var key = modelPath[..^("_c".Length)];
+                        results[modelPath] = new NpcPreset(
+                            key,
+                            display,
+                            modelPath,
+                            preset,
+                            preset.NamedGraphs.ContainsKey("Neutrals"));
+                    }
+                    catch { }
+                }
+
+                var list = results.Values
+                    .OrderBy(preset => preset.DisplayName, StringComparer.OrdinalIgnoreCase)
+                    .ToList();
+                return list.Count == 0
+                    ? (false, "NPC scan completed, but no models with AnimGraph2 nodes were found.", list)
+                    : (true, $"Found {list.Count} NPC preset(s) under models/npc.", list);
+            }
+            catch (Exception ex)
+            {
+                return (false, $"Error scanning NPC presets: {ex.Message}", new List<NpcPreset>());
+            }
+        });
+    }
+
+    private static string ResolveVpkPath(string targetPath)
+    {
+        var resolvedPath = Path.GetFullPath(targetPath);
+        if (!Directory.Exists(resolvedPath)) return resolvedPath;
+
+        var candidates = new[]
+        {
+            Path.Combine(resolvedPath, "pak01_dir.vpk"),
+            Path.Combine(resolvedPath, "game", "citadel", "pak01_dir.vpk"),
+            Path.Combine(resolvedPath, "citadel", "pak01_dir.vpk")
+        };
+        return candidates.FirstOrDefault(File.Exists) ?? resolvedPath;
+    }
+
     private static (bool HasAg2, HeroPreset? Preset, string HeroKey) ExtractAg2FromResource(
         Resource resource,
         string dirName,
@@ -190,6 +266,7 @@ public static class VpkHeroScanner
             string skel = string.Empty;
             string graph = string.Empty;
             string uiGraph = string.Empty;
+            var namedGraphs = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
 
             var skelMatch = Regex.Match(text, @"m_vecNmSkeletonRefs\s*=\s*\[[\s\S]*?(?:resource:)?\s*""([^""]+\.vnmskel)""", RegexOptions.IgnoreCase);
             if (skelMatch.Success)
@@ -221,6 +298,10 @@ public static class VpkHeroScanner
                         {
                             uiGraph = gPath;
                         }
+                        else
+                        {
+                            namedGraphs[id] = gPath;
+                        }
                     }
                 }
             }
@@ -232,7 +313,8 @@ public static class VpkHeroScanner
             if (uiGraph.StartsWith("resource:", StringComparison.OrdinalIgnoreCase))
                 uiGraph = uiGraph["resource:".Length..].Trim().Trim('"');
 
-            if (string.IsNullOrWhiteSpace(skel) || string.IsNullOrWhiteSpace(graph))
+            if (string.IsNullOrWhiteSpace(skel) ||
+                (string.IsNullOrWhiteSpace(graph) && namedGraphs.Count == 0))
                 return (false, null, string.Empty);
 
             var heroKey = fileName.ToLowerInvariant();
@@ -245,7 +327,8 @@ public static class VpkHeroScanner
             {
                 Skel = skel,
                 Graph = graph,
-                UiGraph = uiGraph
+                UiGraph = uiGraph,
+                NamedGraphs = namedGraphs
             };
 
             return (true, preset, heroKey);

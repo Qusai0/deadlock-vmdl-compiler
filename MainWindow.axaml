@@ -146,6 +146,30 @@
                                     </DataTemplate>
                                 </ComboBox.ItemTemplate>
                             </ComboBox>
+                            <Grid ColumnDefinitions="*,Auto" Margin="0,8,0,0">
+                                <TextBlock Text="npc preset" Classes="field-label"/>
+                                <TextBlock x:Name="LblNpcPresetStatus" Grid.Column="1"
+                                           Text="loading..." Classes="field-hint"
+                                           VerticalAlignment="Center"/>
+                            </Grid>
+                            <Grid ColumnDefinitions="*,6,84">
+                                <ComboBox x:Name="CmbNpcPreset" Height="42"
+                                          HorizontalAlignment="Stretch"
+                                          SelectionChanged="CmbNpcPreset_SelectionChanged">
+                                    <ComboBox.ItemTemplate>
+                                        <DataTemplate DataType="models:NpcPresetChoice">
+                                            <StackPanel Spacing="1" VerticalAlignment="Center">
+                                                <TextBlock Text="{Binding DisplayName}" FontSize="11.5"
+                                                           FontWeight="SemiBold"
+                                                           Foreground="{StaticResource StudioText}"/>
+                                                <TextBlock Text="{Binding Detail}" Classes="field-hint"/>
+                                            </StackPanel>
+                                        </DataTemplate>
+                                    </ComboBox.ItemTemplate>
+                                </ComboBox>
+                                <Button Grid.Column="2" Classes="utility" Height="42"
+                                        Content="scan vpk" Click="BtnScanNpcPresets_Click"/>
+                            </Grid>
                             <Grid ColumnDefinitions="*,Auto">
                                 <TextBlock x:Name="LblHeroPathsSource" Text="built-in presets" Classes="field-hint"
                                            TextTrimming="CharacterEllipsis" VerticalAlignment="Center"/>
@@ -358,6 +382,10 @@
                                           Content="auto-detect animations (disable missing clips)"
                                           IsChecked="True"
                                           ToolTip.Tip="Keeps available animations and skips missing source files. Disable animationlist takes priority."/>
+                                <CheckBox x:Name="ChkSkipMaterialCompilation"
+                                          Content="skip material/texture compilation (keep csdk materials)"
+                                          IsChecked="False"
+                                          ToolTip.Tip="Passes -skiptype vmat,vtex to CSWin64 resourcecompiler and temporarily disables missing-material fatal errors in gameinfo.gi. The setting is restored after compilation."/>
                                 <CheckBox x:Name="ChkRevert"
                                           Content="revert vmdl back (clean workspace after compile)"
                                           IsChecked="True"/>
