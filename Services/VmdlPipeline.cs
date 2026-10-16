@@ -50,7 +50,10 @@ public static class VmdlPipeline
 
         private static string? FindGameInfoPath(string cswinDir)
         {
-            var gameRoot = Path.Combine(cswinDir, "game");
+            var root = Path.TrimEndingDirectorySeparator(Path.GetFullPath(cswinDir));
+            var gameRoot = string.Equals(Path.GetFileName(root), "game", StringComparison.OrdinalIgnoreCase)
+                ? root
+                : Path.Combine(root, "game");
             if (!Directory.Exists(gameRoot)) return null;
 
             var candidates = new List<string>();
