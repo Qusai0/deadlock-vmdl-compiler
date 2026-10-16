@@ -1,9 +1,4 @@
-using System;
-using System.Collections.Generic;
 using System.ComponentModel;
-using System.IO;
-using System.Threading;
-using System.Threading.Tasks;
 using Avalonia.Controls;
 using Avalonia.Input;
 using Avalonia.Interactivity;
@@ -32,7 +27,7 @@ public partial class AddAddonWindow : Window
         _contentAddonsDirectory = contentAddonsDirectory;
         _pak01VpkPath = pak01VpkPath;
         _onLog = onLog;
-        foreach (var hero in DeadlockHeroCatalog.GetHeroes())
+        foreach (var hero in DeadlockHeroCatalog.GetExportableModels())
             _heroChoices.Add(new HeroChoice(hero));
         CmbHero.ItemsSource = _heroChoices;
         CmbHero.ItemFilter = (query, item) => item is HeroChoice choice &&
@@ -101,8 +96,9 @@ public partial class AddAddonWindow : Window
                 choice.Icon = new Bitmap(input);
             }
             UpdateSelectedHeroPortrait();
-            if (pngs.Count != _heroChoices.Count)
-                _onLog($"[add addon] loaded {pngs.Count}/{_heroChoices.Count} hero portraits from pak01_dir.vpk.");
+            var available = DeadlockHeroCatalog.GetHeroes().Count(hero => hero.IconVpkPath != null);
+            if (pngs.Count != available)
+                _onLog($"[add addon] loaded {pngs.Count}/{available} hero portraits from pak01_dir.vpk.");
         }
         catch (Exception ex)
         {

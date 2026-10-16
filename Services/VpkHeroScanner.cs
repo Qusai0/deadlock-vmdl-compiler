@@ -1,12 +1,4 @@
-using System;
-using System.Collections.Generic;
-using System.IO;
-using System.Linq;
 using System.Text;
-using System.Text.RegularExpressions;
-using System.Threading.Tasks;
-using DeadlockVmdlCompiler.Models;
-using ValveResourceFormat;
 
 namespace DeadlockVmdlCompiler.Services;
 
@@ -15,7 +7,6 @@ public class VpkEntry
     public string Extension { get; set; } = string.Empty;
     public string Directory { get; set; } = string.Empty;
     public string FileName { get; set; } = string.Empty;
-    public uint CRC32 { get; set; }
     public ushort PreloadBytes { get; set; }
     public ushort ArchiveIndex { get; set; }
     public uint EntryOffset { get; set; }
@@ -389,12 +380,12 @@ public static class VpkHeroScanner
 
                     EnsureTreeBytesAvailable(reader, treeEnd, sizeof(uint) + sizeof(ushort) * 2 + sizeof(uint) * 2 + sizeof(ushort));
 
+                    reader.ReadUInt32(); // CRC32, not checked here
                     var entry = new VpkEntry
                     {
                         Extension = ext,
                         Directory = dir == " " ? string.Empty : dir,
                         FileName = filename,
-                        CRC32 = reader.ReadUInt32(),
                         PreloadBytes = reader.ReadUInt16(),
                         ArchiveIndex = reader.ReadUInt16(),
                         EntryOffset = reader.ReadUInt32(),
@@ -504,16 +495,17 @@ public static class VpkHeroScanner
 
     private static string ReadNullTerminatedString(BinaryReader reader, long limit)
     {
-        var sb = new StringBuilder();
+        var bytes = new List<byte>();
         while (true)
         {
             if (reader.BaseStream.Position >= limit)
                 throw new InvalidDataException("VPK tree contains an unterminated string.");
             byte b = reader.ReadByte();
             if (b == 0) break;
-            sb.Append((char)b);
+            bytes.Add(b);
         }
-        return sb.ToString();
+        // VpkBuilder writes UTF-8 names; ASCII game archives read the same either way.
+        return Encoding.UTF8.GetString(bytes.ToArray());
     }
 
     private static void EnsureTreeBytesAvailable(BinaryReader reader, long treeEnd, long byteCount)

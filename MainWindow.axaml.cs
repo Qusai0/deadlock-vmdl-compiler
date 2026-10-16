@@ -1,11 +1,5 @@
-using System;
-using System.Collections.Generic;
 using System.Diagnostics;
-using System.IO;
-using System.Linq;
 using System.Security.Cryptography;
-using System.Threading;
-using System.Threading.Tasks;
 using Avalonia.Controls;
 using Avalonia.Interactivity;
 using Avalonia.Media;
@@ -32,7 +26,9 @@ public partial class MainWindow : Window
     private Dictionary<string, Bitmap> _presetPortraits = new(StringComparer.OrdinalIgnoreCase);
     private readonly SemaphoreSlim _portraitLoadGate = new(1, 1);
     private string? _portraitSource;
-    private int _logLineCount = 0;
+    private bool _logFlushPending;
+    private int _previewRequest;
+    private CancellationTokenSource? _compileCancellation;
     private readonly System.Text.StringBuilder _logBuffer = new();
     private sealed record ProtectedModelState(
         CompiledModelProtection Guard, string? Skel, string? Graph, string? UiGraph,
@@ -182,6 +178,38 @@ public partial class MainWindow : Window
         Log("[ag2 presets] using the built-in preset list.");
     }
 
+    private async void BtnLoadHeroPaths_Click(object? sender, RoutedEventArgs e)
+    {
+        if (_isProcessing) return;
+        var files = await StorageProvider.OpenFilePickerAsync(new FilePickerOpenOptions
+        {
+            Title = "select ag2 preset list (hero_paths.json format)",
+            FileTypeFilter = new[]
+            {
+                new FilePickerFileType("ag2 preset list (*.json)") { Patterns = new[] { "*.json" } }
+            }
+        });
+        if (files.Count == 0) return;
+
+        var path = files[0].Path.LocalPath;
+        try
+        {
+            var count = HeroDatabase.LoadCustomDatabase(path);
+            _config.HeroPathsFile = path;
+            _config.UseBuiltInHeroPaths = false;
+            SaveConfig();
+            PopulateHeroPresets();
+            Log($"[ag2 presets] loaded {count} preset(s) from {path}");
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or
+                                       System.Text.Json.JsonException or ArgumentException or NotSupportedException)
+        {
+            // The active list is untouched when a file is rejected.
+            Log($"[ag2 presets] {Path.GetFileName(path)} rejected: {ex.Message}");
+            await DialogService.ShowErrorAsync(this, "preset list rejected", ex.Message);
+        }
+    }
+
     private async Task LoadPresetPortraitsAsync(string vpkPath)
     {
         if (!File.Exists(vpkPath)) return;
@@ -217,8 +245,9 @@ public partial class MainWindow : Window
                 oldPortrait.Dispose();
             _presetPortraits = portraits;
             _portraitSource = vpkPath;
-            if (portraits.Count != DeadlockHeroCatalog.GetHeroes().Count)
-                Log($"[ag2 presets] loaded {portraits.Count} of 38 hero portraits from VPK.");
+            var available = DeadlockHeroCatalog.GetHeroes().Count(hero => hero.IconVpkPath != null);
+            if (portraits.Count != available)
+                Log($"[ag2 presets] loaded {portraits.Count} of {available} hero portraits from VPK.");
         }
         catch (Exception ex)
         {
@@ -329,7 +358,6 @@ public partial class MainWindow : Window
         {
             _isInitializing = true;
             _isUpdatingSelection = true;
-            DmxModelLoader.DebugLogger = Log;
 
             _config = ConfigManager.LoadConfig();
 
@@ -406,10 +434,11 @@ public partial class MainWindow : Window
     private void BtnToggleAdvanced_Click(object? sender, RoutedEventArgs e)
     {
         PanelAdvancedContent.IsVisible = !PanelAdvancedContent.IsVisible;
-        IconAdvancedChevron.Data = PanelAdvancedContent.IsVisible
-            ? Geometry.Parse("M7.41 15.41L12 10.83L16.59 15.41L18 14L12 8L6 14L7.41 15.41Z")
-            : Geometry.Parse("M7.41 8.59L12 13.17L16.59 8.59L18 10L12 16L6 10L7.41 8.59Z");
+        IconAdvancedChevron.Data = (Geometry)this.FindResource(
+            PanelAdvancedContent.IsVisible ? "IconChevronUp" : "IconChevronDown")!;
     }
+
+    private void BtnResetView_Click(object? sender, RoutedEventArgs e) => ModelViewport.ResetView();
 
     private async Task PromptFirstTimeSetupAsync(bool needCsWin, bool needCitadel)
     {
@@ -456,13 +485,12 @@ public partial class MainWindow : Window
     private void BtnClearLog_Click(object? sender, RoutedEventArgs e)
     {
         _logBuffer.Clear();
-        _logLineCount = 0;
         TxtLog.Text = string.Empty;
     }
 
     private async void BtnCopyLog_Click(object? sender, RoutedEventArgs e)
     {
-        var text = TxtLog.Text;
+        var text = _logBuffer.ToString();
         if (!string.IsNullOrEmpty(text))
         {
             var topLevel = TopLevel.GetTopLevel(this);
@@ -476,12 +504,10 @@ public partial class MainWindow : Window
 
     private void Log(string message)
     {
+        var line = $"[{DateTime.Now:HH:mm:ss}] {message}";
         Dispatcher.UIThread.Post(() =>
         {
-            var timestamp = DateTime.Now.ToString("HH:mm:ss");
-            var line = $"[{timestamp}] {message}";
             _logBuffer.AppendLine(line);
-            _logLineCount++;
 
             // Truncate buffer if exceedingly large (keep latest ~150k chars) to preserve UI responsiveness
             if (_logBuffer.Length > 200_000)
@@ -495,12 +521,16 @@ public partial class MainWindow : Window
                 }
             }
 
-            TxtLog.Text = _logBuffer.ToString();
-
-            if (ChkAutoScroll?.IsChecked == true)
+            // Chatty compiler output arrives line by line; repaint once per burst.
+            if (_logFlushPending) return;
+            _logFlushPending = true;
+            Dispatcher.UIThread.Post(() =>
             {
-                ScrollLog?.ScrollToEnd();
-            }
+                _logFlushPending = false;
+                TxtLog.Text = _logBuffer.ToString();
+                if (ChkAutoScroll?.IsChecked == true)
+                    ScrollLog?.ScrollToEnd();
+            }, DispatcherPriority.Background);
         });
     }
 
@@ -509,6 +539,7 @@ public partial class MainWindow : Window
     // -----------------------------------------------------------------
     private async Task Init3DSceneAsync(string? targetPath = null)
     {
+        var request = ++_previewRequest;
         try
         {
             var path = targetPath ?? GetResolvedTargetPath();
@@ -518,6 +549,8 @@ public partial class MainWindow : Window
             {
                 LblMeshName.Text = "mesh: loading preview...";
                 var mesh = await DmxModelLoader.LoadModelFromVmdlAsync(path, citadelDir);
+                // A newer selection owns the viewport now.
+                if (request != _previewRequest) return;
                 ModelViewport.CurrentMesh = mesh;
 
                 if (mesh != null && mesh.Vertices.Count > 0)
@@ -605,7 +638,8 @@ public partial class MainWindow : Window
             var info = DeadlockLocator.DetectDeadlockInstallation();
             if (info.IsValid && !citadelValid)
             {
-                var candAddons = Path.Combine(info.GameRootPath, "content", "citadel_addons");
+                // Workshop tools installed into the game keep addons beside it, named after its content folder.
+                var candAddons = Path.Combine(info.GameRootPath, "content", info.ModDirectoryName + "_addons");
                 if (Directory.Exists(candAddons))
                 {
                     TxtCitadelPath.Text = candAddons;
@@ -641,7 +675,6 @@ public partial class MainWindow : Window
                 Name = $"(select addon: {_discoveredAddons.Count} available)",
                 FullPath = string.Empty,
                 HeroModels = new List<DiscoveredModel>(),
-                IsPlaceholder = true,
                 Display = $"(select addon: {_discoveredAddons.Count} available)"
             };
             displayList.Add(placeholder);
@@ -649,7 +682,6 @@ public partial class MainWindow : Window
 
             CmbDiscovered.ItemsSource = displayList;
 
-            int totalModels = _discoveredAddons.Sum(a => a.HeroModels.Count);
             LblDiscoveredCount.Text = $"{_discoveredAddons.Count} addon(s) available";
             LblDiscoveredCount.Foreground = BrushMuted;
 
@@ -756,7 +788,6 @@ public partial class MainWindow : Window
 
         _config.CsWinDir = TxtCsWinPath.Text?.Trim() ?? string.Empty;
         _config.CitadelAddonsDir = TxtCitadelPath.Text?.Trim() ?? string.Empty;
-        _config.LastTargetPath = GetResolvedTargetPath() ?? string.Empty;
         _config.ChkRevert = ChkRevert.IsChecked == true;
         _config.ChkSkel = ChkSkel.IsChecked == true;
         _config.ChkGraph = ChkGraph.IsChecked == true;
@@ -826,7 +857,6 @@ public partial class MainWindow : Window
         {
             UpdateHeroDetailsFromPath(path);
             _ = Init3DSceneAsync(path);
-            Log($"selected model: {Path.GetFileName(path)}");
         }
         SaveConfig();
     }
@@ -939,9 +969,7 @@ public partial class MainWindow : Window
             var model = new DiscoveredModel
             {
                 FullPath = fullPath,
-                Filename = Path.GetFileName(fullPath),
-                Display = Path.GetFileName(fullPath),
-                Addon = "manual"
+                Display = Path.GetFileName(fullPath)
             };
             CmbTargetVmdl.ItemsSource = new List<DiscoveredModel> { model };
             CmbTargetVmdl.SelectedIndex = 0;
@@ -958,6 +986,7 @@ public partial class MainWindow : Window
 
     private async void BtnSanitizeModelDoc_Click(object? sender, RoutedEventArgs e)
     {
+        if (_isProcessing) return;
         var targetPath = GetResolvedTargetPath();
         if (string.IsNullOrEmpty(targetPath) || !File.Exists(targetPath))
         {
@@ -968,14 +997,16 @@ public partial class MainWindow : Window
 
         try
         {
-            var (success, msg) = await VmdlPipeline.SanitizeVmdlForModelDocAsync(
+            _isProcessing = true;
+            var disableAnimationList = ChkDisableAnimList.IsChecked == true;
+            var (success, msg, changed) = await Task.Run(() => VmdlPipeline.SanitizeVmdlForModelDocAsync(
                 targetPath,
-                disableAnimationList: ChkDisableAnimList.IsChecked == true
-            );
+                disableAnimationList: disableAnimationList
+            ));
             Log(msg);
             if (success)
             {
-                await DialogService.ShowInfoAsync(this, "modeldoc fixed", "modeldoc syntax cleaned successfully.");
+                await DialogService.ShowInfoAsync(this, changed ? "modeldoc fixed" : "nothing to fix", msg);
             }
             else
             {
@@ -986,6 +1017,10 @@ public partial class MainWindow : Window
         {
             Log($"[fix modeldoc error] {ex.Message}");
             await DialogService.ShowErrorAsync(this, "fix modeldoc error", ex.Message);
+        }
+        finally
+        {
+            _isProcessing = false;
         }
     }
 
@@ -1006,7 +1041,7 @@ public partial class MainWindow : Window
 
         try
         {
-            var (container, addonName, subpath) = VmdlPipeline.ParseCsdkPath(targetPath, citadelDir);
+            var (_, addonName, subpath) = VmdlPipeline.ParseCsdkPath(targetPath, citadelDir);
             var gameAddonDir = VmdlPipeline.ResolveGameAddonDir(targetPath, citadelDir, addonName);
 
             if (!Directory.Exists(gameAddonDir))
@@ -1193,6 +1228,7 @@ public partial class MainWindow : Window
 
     private async void BtnExportCsWin_Click(object? sender, RoutedEventArgs e)
     {
+        if (_isProcessing) return;
         var targetPath = GetResolvedTargetPath();
         var csWinDir = TxtCsWinPath.Text?.Trim();
         var citadelDir = TxtCitadelPath.Text?.Trim();
@@ -1213,18 +1249,26 @@ public partial class MainWindow : Window
 
         try
         {
-            var (success, msg, filesCopied) = await VmdlPipeline.ExportToCsWinAddonAsync(
+            _isProcessing = true;
+            var skel = TxtSkel.Text?.Trim();
+            var graph = TxtGraph.Text?.Trim();
+            var uiGraph = TxtUiGraph.Text?.Trim();
+            var addSkel = ChkSkel.IsChecked == true;
+            var addGraph = ChkGraph.IsChecked == true;
+            var addUiGraph = ChkUiGraph.IsEnabled && ChkUiGraph.IsChecked == true;
+            var namedGraphs = _selectedNamedGraphs;
+            var (success, msg, filesCopied) = await Task.Run(() => VmdlPipeline.ExportToCsWinAddonAsync(
                 targetPath,
-                skelPath: TxtSkel.Text?.Trim(),
-                graphPath: TxtGraph.Text?.Trim(),
-                uiGraphPath: TxtUiGraph.Text?.Trim(),
-                addSkel: ChkSkel.IsChecked == true,
-                addGraph: ChkGraph.IsChecked == true,
-                addUiGraph: ChkUiGraph.IsEnabled && ChkUiGraph.IsChecked == true,
+                skelPath: skel,
+                graphPath: graph,
+                uiGraphPath: uiGraph,
+                addSkel: addSkel,
+                addGraph: addGraph,
+                addUiGraph: addUiGraph,
                 cswinDir: csWinDir,
                 citadelAddonsDir: citadelDir,
-                namedGraphs: _selectedNamedGraphs
-            );
+                namedGraphs: namedGraphs
+            ));
 
             Log(msg);
             if (success)
@@ -1241,10 +1285,30 @@ public partial class MainWindow : Window
             Log($"[export error] {ex.Message}");
             await DialogService.ShowErrorAsync(this, "export error", ex.Message);
         }
+        finally
+        {
+            _isProcessing = false;
+        }
+    }
+
+    private void EndCompileCancellation()
+    {
+        _compileCancellation?.Dispose();
+        _compileCancellation = null;
+        BtnCompile.IsEnabled = true;
+        TxtCompileBtn.Text = "compile model";
     }
 
     private async void BtnCompile_Click(object? sender, RoutedEventArgs e)
     {
+        // While resourcecompiler runs, the same button stops it.
+        if (_compileCancellation != null)
+        {
+            _compileCancellation.Cancel();
+            BtnCompile.IsEnabled = false;
+            TxtCompileBtn.Text = "cancelling...";
+            return;
+        }
         if (_isProcessing) return;
 
         var targetPath = GetResolvedTargetPath();
@@ -1281,8 +1345,12 @@ public partial class MainWindow : Window
         try
         {
             _isProcessing = true;
-            BtnCompile.IsEnabled = false;
-            TxtCompileBtn.Text = "compiling...";
+            _compileCancellation = new CancellationTokenSource();
+            var cancellation = _compileCancellation.Token;
+            var revert = ChkRevert.IsChecked == true;
+            var disableAnimationList = ChkDisableAnimList.IsChecked == true;
+            var autoDetectAnims = ChkAutoDetectAnims.IsChecked == true;
+            TxtCompileBtn.Text = "cancel compile";
 
             // Show real-time compilation progress bar under compile button
             PanelCompileProgress.IsVisible = true;
@@ -1304,7 +1372,10 @@ public partial class MainWindow : Window
                 });
             });
 
-            var (success, msg) = await VmdlPipeline.ProcessVmdlFileAsync(
+            var compilerErrors = new List<string>();
+            // Parsing, asset sync and the compiler all stay off the UI thread;
+            // the deploy callbacks touch window state, so they hop back.
+            var (success, msg) = await Task.Run(() => VmdlPipeline.ProcessVmdlFileAsync(
                 targetPath,
                 skelPath: requestedSkel,
                 graphPath: requestedGraph,
@@ -1315,7 +1386,7 @@ public partial class MainWindow : Window
                 addUiGraph: addUiGraph,
                 upgradeHeader: true,
                 compileCsWin: true,
-                revertVmdl: ChkRevert.IsChecked == true,
+                revertVmdl: revert,
                 cswinDir: csWinDir,
                 citadelAddonsDir: citadelDir,
                 disableAnimationList: ChkDisableAnimList.IsChecked == true,
@@ -1324,16 +1395,19 @@ public partial class MainWindow : Window
                 namedGraphs: namedGraphs,
                 progress: progress,
                 onLog: Log,
-                beforeDeploy: ReleaseProtectionForOutput,
-                afterDeploy: (deployedPath, compilerOutputPath) =>
+                beforeDeploy: deployedPath => Dispatcher.UIThread.Invoke(() => ReleaseProtectionForOutput(deployedPath)),
+                afterDeploy: (deployedPath, compilerOutputPath) => Dispatcher.UIThread.Invoke(() =>
                 {
                     var protection = CompiledModelProtection.Acquire(deployedPath, compilerOutputPath);
                     _protectedModels[targetPath] = new ProtectedModelState(
                         protection, expectedSkel, expectedGraph, expectedUiGraph, namedGraphs);
                     UpdateProtectionStatus();
                     Log($"[protect] CSDK12 cannot overwrite {Path.GetFileName(deployedPath)} until packaging or refusal.");
-                }
-            );
+                }),
+                cancellationToken: cancellation,
+                compilerErrors: compilerErrors
+            ), cancellation);
+            EndCompileCancellation();
 
             if (success)
             {
@@ -1342,12 +1416,19 @@ public partial class MainWindow : Window
                 LblCompileStage.Text = "[5/5] complete";
                 LblCompileDetail.Text = "deployed successfully";
 
-                Log($"[compile success] {msg}");
+                // resourcecompiler can exit cleanly with a broken reference inside the model.
+                var errorNote = compilerErrors.Count == 0 ? string.Empty :
+                    $"resourcecompiler reported {compilerErrors.Count} error(s); the model was built, but these parts may be broken in game:\n\n" +
+                    string.Join("\n", compilerErrors.Take(6).Select(error => "- " + error)) +
+                    (compilerErrors.Count > 6 ? $"\n- and {compilerErrors.Count - 6} more in the log" : string.Empty) + "\n\n";
+                if (compilerErrors.Count > 0)
+                    Log($"[compile warning] model deployed with {compilerErrors.Count} compiler error(s), see ERROR lines above");
 
                 var packVpk = await DialogService.ShowConfirmAsync(
                     this,
-                    "compilation successful",
-                    "model compiled and deployed successfully!\n\nwould you like to package the addon into a .vpk archive now?"
+                    compilerErrors.Count == 0 ? "compilation successful" : "compiled with errors",
+                    (compilerErrors.Count == 0 ? "model compiled and deployed successfully!\n\n" : errorNote) +
+                    "would you like to package the addon into a .vpk archive now?"
                 );
 
                 if (packVpk)
@@ -1373,6 +1454,12 @@ public partial class MainWindow : Window
                 await DialogService.ShowErrorAsync(this, "compilation failed", $"compilation failed:\n\n{msg}");
             }
         }
+        catch (OperationCanceledException)
+        {
+            LblCompileStage.Text = "[cancelled]";
+            LblCompileDetail.Text = "compilation stopped; nothing was deployed";
+            Log("[compile] cancelled by user; nothing was deployed.");
+        }
         catch (Exception ex)
         {
             LblCompileStage.Text = "[error] exception";
@@ -1383,9 +1470,8 @@ public partial class MainWindow : Window
         }
         finally
         {
+            EndCompileCancellation();
             _isProcessing = false;
-            BtnCompile.IsEnabled = true;
-            TxtCompileBtn.Text = "compile model";
         }
     }
 

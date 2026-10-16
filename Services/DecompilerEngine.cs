@@ -1,12 +1,6 @@
-using System;
-using System.Collections.Generic;
 using System.Diagnostics;
-using System.IO;
-using System.Linq;
 using System.Text;
 using System.Text.RegularExpressions;
-using System.Threading;
-using System.Threading.Tasks;
 using ValvePak;
 using ValveResourceFormat;
 using ValveResourceFormat.IO;
@@ -244,7 +238,7 @@ public static class DecompilerEngine
                                 animCount++;
                                 if (animCount % 15 == 0 || animCount <= 3)
                                 {
-                                    onLog?.Invoke($"[animation] {filename} (#{animCount})");
+                                    onLog?.Invoke($"[dmx] {filename} (#{animCount})");
                                 }
                             }
 
@@ -276,7 +270,11 @@ public static class DecompilerEngine
                             cancellationToken.ThrowIfCancellationRequested();
                             using var materialResource = fileLoader!.LoadFileCompiled(materialPath);
                             if (materialResource == null)
-                                throw new FileNotFoundException($"Model material is missing from game files: {materialPath}");
+                            {
+                                // One absent material must not discard the whole export.
+                                onLog?.Invoke($"[material] missing from game files, skipped: {materialPath}");
+                                continue;
+                            }
                             materialResource.FileName = materialPath + "_c";
                             using var materialFile = new MaterialExtract(materialResource, fileLoader).ToContentFile();
                             materialFile.FileName = materialPath;

@@ -1,5 +1,3 @@
-using System;
-using System.IO;
 using System.Text.Json;
 using DeadlockVmdlCompiler.Models;
 
@@ -26,9 +24,7 @@ public static class ConfigManager
             var tempDir = Path.GetTempPath().ToLowerInvariant().TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
 
             return norm.StartsWith(tempDir) ||
-                   norm.Contains("appdata\\local\\temp") ||
-                   norm.Contains("hero_filter_test_") ||
-                   norm.Contains("citadel_test_");
+                   norm.Contains("appdata\\local\\temp");
         }
         catch
         {
@@ -64,21 +60,9 @@ public static class ConfigManager
             }
         }
 
-        // Sanitize temporary or deleted paths
-        if (IsTemporaryPath(config.CitadelAddonsDir) || (!string.IsNullOrEmpty(config.CitadelAddonsDir) && !Directory.Exists(config.CitadelAddonsDir)))
-        {
+        // A missing folder is kept: the drive may simply be disconnected right now.
+        if (IsTemporaryPath(config.CitadelAddonsDir))
             config.CitadelAddonsDir = string.Empty;
-        }
-
-        if (!string.IsNullOrEmpty(config.CsWinDir) && !Directory.Exists(config.CsWinDir))
-        {
-            config.CsWinDir = string.Empty;
-        }
-
-        if (IsTemporaryPath(config.LastTargetPath))
-        {
-            config.LastTargetPath = string.Empty;
-        }
 
         return config;
     }
@@ -89,9 +73,6 @@ public static class ConfigManager
         {
             if (IsTemporaryPath(config.CitadelAddonsDir))
                 config.CitadelAddonsDir = string.Empty;
-
-            if (IsTemporaryPath(config.LastTargetPath))
-                config.LastTargetPath = string.Empty;
 
             var path = GetConfigPath();
             Directory.CreateDirectory(Path.GetDirectoryName(path)!);

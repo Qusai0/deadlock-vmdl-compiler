@@ -24,22 +24,22 @@ Deadlock uses AnimGraph 2 (AG2) animation structures. Standard CSDK12 tooling ca
 ## Interface & Controls Reference
 
 ### Model Selection & Presets
-- **add addon**: Exports the selected hero's main model, animations, materials, textures, and available cloth assets into a CSDK12 addon using the original VPK paths. The catalog contains 44 heroes, including Baba, Deadman Danny, Nurse Harrow, Rat King, Solomon, and Violet. Cloth nodes may still need manual fixes. The September 2026 prerelease models reference default AG2 graphs that are not yet shipped in the installed VPK; presets retain those exact references.
+- **add addon**: Exports the selected hero's main model, animations, materials, textures, and available cloth assets into a CSDK12 addon using the original VPK paths. The catalog contains 44 heroes, including Baba, Deadman Danny, Nurse Harrow, Rat King, Solomon, and Violet, followed by the 19 AG2 neutral creeps. A material that is absent from the game files is logged and skipped instead of failing the export. Cloth nodes may still need manual fixes. The September 2026 prerelease models reference default AG2 graphs that are not yet shipped in the installed VPK; presets retain those exact references.
 - **discovered addon**: Auto-detects and lists all available addons in your content folder.
-- **target vmdl file**: Selects the target .vmdl model file inside the selected addon.
-- **hero preset**: Auto-detects or selects the hero archetype to assign corresponding skeleton and AnimGraph paths.
+- **target vmdl file**: Selects the target .vmdl model file inside the selected addon. Hero models are listed from `heroes_wip` and `heroes_staging`; other models, such as neutral creeps, are listed when their file name matches a preset. Use **browse** for anything else.
+- **hero preset**: Auto-detects or selects the hero archetype to assign corresponding skeleton and AnimGraph paths. **load list...** replaces the menu with your own preset file (see *Custom preset format*); **default list** returns to the built-in presets.
 - **neutral presets**: The built-in list includes 19 neutral model variants with verified AG2 skeletons and `Neutrals` graph bindings. NPCs without those AG2 resources are excluded. Named graphs are injected with their original identifiers, and a missing UI graph is automatically skipped.
 
 ### Pipeline Actions
 - **compile**: Runs the full automated compilation pipeline (injects AG2 references, compiles via CSWin64 ModelDoc, verifies the AG2 references in the compiled .vmdl_c before deployment, copies it to the addon game directory, and leaves the CSDK .vmdl unchanged when revert is enabled (otherwise it saves the injected version).
 - **compile-to-VPK protection**: After a successful CSWin64 compile, the app holds a Windows read-only handle on the deployed `.vmdl_c` so CSDK12 cannot overwrite it while the user decides whether to create a VPK. VPK creation can still read the file. After packaging, the app reopens the archive and compares the length and SHA-256 of the selected model and all protected models against their Game addon files; protection is released only after this verification succeeds. If packaging fails, the user can keep the files locked and retry, decline packaging, or close the app to release the handles.
-- **fix(modeldoc)**: Removes all AG2 nodes from decompiled .vmdl to prevent crash.
+- **fix(modeldoc)**: Removes all AG2 nodes from decompiled .vmdl to prevent crash. It uses the same cleaner as addon export, and only writes a backup when the file actually changes.
 - **make vpk...**: Checks the selected compiled model for required AG2 references and refuses to pack if any are missing; requires a compiled Game addon and suggests `pak01_dir.vpk` in that folder as the output location.
 - **export to cswin64**: Copies the prepared source files directly to the CSWin64 workspace for manual inspection.
 
 ### Environment Paths & Options
-- **Deadlock installation**: Detected through Steam's registry/client location, `libraryfolders.vdf`, and `appmanifest_1422450.acf`. The manifest's `installdir` determines the game folder in each Steam library; no fixed drive paths or game folder names are required. If Steam metadata is unavailable, addon creation still offers manual VPK selection.
-- **cswin64 installation**: Select the CSWin64 installation root that contains `game/bin/win64/resourcecompiler.exe` (or `bin/win64/resourcecompiler.exe`), not the `bin` directory itself.
+- **Deadlock installation**: Detected from the location Steam registers with Windows for the app, then from Steam's registry/client location, `libraryfolders.vdf`, and `appmanifest_1422450.acf`. Inside the installation the content folder is the one whose `steam.inf` carries Deadlock's app id, and the launcher is the executable that embeds that folder's name; no drive paths, folder names or executable names are assumed. If Steam metadata is unavailable, addon creation still offers manual VPK selection.
+- **cswin64 installation**: Select the CSWin64 installation root that contains `game/bin/win64/resourcecompiler.exe`, not the `bin` directory itself. Selecting its `game` directory (containing `bin/win64/resourcecompiler.exe`) also works; `content` is then expected beside it.
 - **csdk addons folder**: Path to your Deadlock content/citadel_addons directory.
 - **inject nmskeleton**: Injects compiled vanilla .vnmskel reference before compiling.
 - **inject animgraph2 (default & named)**: Injects the compiled default graph and any named graph bindings supplied by the preset.
@@ -48,10 +48,12 @@ Deadlock uses AnimGraph 2 (AG2) animation structures. Standard CSDK12 tooling ca
 - **auto-detect animations**: Keeps available animation sources active and disables only missing clips in the temporary CSWin64 model. Existing per-clip mute flags are preserved. Sources are resolved at their authored paths, including model-relative paths; referenced animations outside the model folder are copied to the matching CSWin64 addon paths. Turn this option off to compile all configured clips without automatic filtering. Both settings are saved, including settings from older versions.
 
 ### Visuals
-- **3D preview**: Interactive real-time 3D viewport with mesh rendering and camera controls.
+- **3D preview**: Textured model preview at real scale on a half-metre ground grid. Drag to orbit, right or middle drag (or Shift+drag) to pan, wheel to zoom, double-click, F or **reset view** to frame the model again. Materials missing from the addon (for example the original hero's weapons) are shown in flat grey.
 - **log console**: Real-time output log tracking all compiler steps and status.
 
 ### Custom preset format
+
+Load a preset file with **load list...** under the hero preset menu. The choice is remembered between sessions.
 
 Use the existing `skel`, `graph`, and `ui_graph` fields for hero presets. A preset can also supply `named_graphs`, preserving graph identifiers used by NPCs. For example:
 
@@ -126,7 +128,6 @@ MIT License
 ## Credits & Inspiration
 
 - Original concept idea by **Qusai** from the Deadlock Modding Discord server.
-- Automatic animation source detection contributed by **Qusai0**, integrated with manual controls in v1.3.5.
 - Icons and resource parsing powered by [ValveResourceFormat (Source 2 Viewer)](https://github.com/SteamDatabase/ValveResourceFormat) by SteamDatabase.
 
 ---

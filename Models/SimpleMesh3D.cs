@@ -1,6 +1,4 @@
-﻿using System;
-using System.Collections.Generic;
-using System.Numerics;
+﻿using System.Numerics;
 
 namespace DeadlockVmdlCompiler.Models;
 
@@ -12,6 +10,12 @@ public class MeshTexture
     public int[] Pixels { get; set; } = Array.Empty<int>();
     public int FallbackColor { get; set; } = unchecked((int)0xFF94A3B8);
     public Vector3 Tint { get; set; } = Vector3.One;
+    public bool AlphaTest { get; set; }
+
+    /// <summary>Additive effect surfaces such as lenses and glows; the opaque preview leaves them out.</summary>
+    public bool IsAdditive { get; set; }
+
+    /// <summary>Cut-out surfaces such as hair cards; texels below half alpha are not drawn.</summary>
     public bool AlphaTest { get; set; }
 
     public int Sample(float u, float v)
@@ -36,7 +40,8 @@ public class MeshTexture
         int r = (int)MathF.Round(Ch(c00, 16) * (1 - tx) * (1 - ty) + Ch(c10, 16) * tx * (1 - ty) + Ch(c01, 16) * (1 - tx) * ty + Ch(c11, 16) * tx * ty);
         int g = (int)MathF.Round(Ch(c00, 8) * (1 - tx) * (1 - ty) + Ch(c10, 8) * tx * (1 - ty) + Ch(c01, 8) * (1 - tx) * ty + Ch(c11, 8) * tx * ty);
         int b = (int)MathF.Round(Ch(c00, 0) * (1 - tx) * (1 - ty) + Ch(c10, 0) * tx * (1 - ty) + Ch(c01, 0) * (1 - tx) * ty + Ch(c11, 0) * tx * ty);
-        return unchecked((int)(0xFF000000u | ((uint)r << 16) | ((uint)g << 8) | (uint)b));
+        int a = (int)MathF.Round(Ch(c00, 24) * (1 - tx) * (1 - ty) + Ch(c10, 24) * tx * (1 - ty) + Ch(c01, 24) * (1 - tx) * ty + Ch(c11, 24) * tx * ty);
+        return unchecked((int)(((uint)a << 24) | ((uint)r << 16) | ((uint)g << 8) | (uint)b));
     }
 }
 
@@ -50,19 +55,13 @@ public class SimpleMesh3D
     public List<int> TriangleMaterialIds { get; set; } = new();
     public List<MeshTexture> Materials { get; set; } = new();
 
-    public Vector3 BoundsMin { get; set; } = new Vector3(-1, -1, -1);
-    public Vector3 BoundsMax { get; set; } = new Vector3(1, 1, 1);
     public Vector3 Center { get; set; } = Vector3.Zero;
     public float Radius { get; set; } = 1.0f;
-    public int BoneCount { get; set; }
-    public int MaterialCount { get; set; }
 
     public void RecalculateBounds()
     {
         if (Vertices.Count == 0)
         {
-            BoundsMin = new Vector3(-1, -1, -1);
-            BoundsMax = new Vector3(1, 1, 1);
             Center = Vector3.Zero;
             Radius = 1.0f;
             return;
@@ -77,8 +76,6 @@ public class SimpleMesh3D
             max = Vector3.Max(max, v);
         }
 
-        BoundsMin = min;
-        BoundsMax = max;
         Center = (min + max) * 0.5f;
 
         float maxDistSq = 0;

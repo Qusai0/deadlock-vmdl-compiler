@@ -18,9 +18,9 @@
     <Product>Deadlock AG2 Compiler</Product>
     <AssemblyTitle>Deadlock AG2 Compiler</AssemblyTitle>
     <Description>Deadlock AnimGraph2 nodes injection and compilation tool</Description>
-    <Version>1.3.7</Version>
-    <AssemblyVersion>1.3.7</AssemblyVersion>
-    <FileVersion>1.3.7</FileVersion>
+    <Version>1.4.0</Version>
+    <AssemblyVersion>1.4.0</AssemblyVersion>
+    <FileVersion>1.4.0</FileVersion>
   </PropertyGroup>
 
   <PropertyGroup Condition="'$(Configuration)' == 'Release'">
@@ -46,7 +46,6 @@
     <PackageReference Include="Avalonia.Themes.Fluent" Version="11.2.5" />
     <PackageReference Include="Avalonia.Fonts.Inter" Version="11.2.5" />
     <PackageReference Include="ValveKeyValue" Version="0.70.0.499" />
-    <PackageReference Include="ValvePak" Version="4.0.0.142" />
     <PackageReference Include="ValveResourceFormat" Version="[20.0.7151-vcs72.1]" />
   </ItemGroup>
 
