@@ -1,5 +1,9 @@
 # Changelog
 
+## Unreleased
+
+- Added an opt-in **skip material/texture compilation** setting for newer CSWin64 builds. It passes `-skiptype vmat,vtex`, temporarily disables missing-material fatal errors in CSWin64 `gameinfo.gi`, restores that file after compilation, and preserves the original CSDK material references.
+
 ## 1.3.7
 
 - Added support for neutral creeps.
