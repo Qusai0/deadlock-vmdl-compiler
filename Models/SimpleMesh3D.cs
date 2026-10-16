@@ -10,7 +10,6 @@ public class MeshTexture
     public int[] Pixels { get; set; } = Array.Empty<int>();
     public int FallbackColor { get; set; } = unchecked((int)0xFF94A3B8);
     public Vector3 Tint { get; set; } = Vector3.One;
-    public bool AlphaTest { get; set; }
 
     /// <summary>Additive effect surfaces such as lenses and glows; the opaque preview leaves them out.</summary>
     public bool IsAdditive { get; set; }

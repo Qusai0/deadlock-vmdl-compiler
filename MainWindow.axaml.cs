@@ -137,6 +137,9 @@ public partial class MainWindow : Window
             if (!IsVisible) return;
 
             PopulateNpcPresets(result.Presets);
+            var currentTarget = GetResolvedTargetPath();
+            if (!string.IsNullOrWhiteSpace(currentTarget))
+                UpdateHeroDetailsFromPath(currentTarget);
             Log($"[npc presets] {result.Message}");
         }
         catch (Exception ex)
@@ -419,6 +422,8 @@ public partial class MainWindow : Window
             {
                 await PromptFirstTimeSetupAsync(!csValid, !citValid);
             }
+
+            _ = CheckForUpdatesAsync();
         }
         catch (Exception ex)
         {
@@ -428,6 +433,40 @@ public partial class MainWindow : Window
         {
             _isUpdatingSelection = false;
             _isInitializing = false;
+        }
+    }
+
+    private async Task CheckForUpdatesAsync()
+    {
+        try
+        {
+            var result = await UpdateService.CheckAndDownloadAsync();
+            if (!result.UpdateAvailable)
+                return;
+
+            if (!result.Success || string.IsNullOrWhiteSpace(result.DownloadedExecutablePath))
+            {
+                Log($"[update] {result.Message}");
+                if (IsVisible)
+                {
+                    await DialogService.ShowInfoAsync(this, "update available",
+                        $"version {result.LatestVersion} is available, but it could not be downloaded automatically.\n\n" +
+                        (result.ReleaseUrl ?? "open the project releases page to download it."));
+                }
+                return;
+            }
+
+            Log($"[update] downloaded version {result.LatestVersion}: {result.DownloadedExecutablePath}");
+            if (IsVisible)
+            {
+                await DialogService.ShowInfoAsync(this, "update downloaded",
+                    $"version {result.LatestVersion} was downloaded.\n\n" +
+                    $"run the new executable to update:\n{result.DownloadedExecutablePath}");
+            }
+        }
+        catch (Exception ex)
+        {
+            Log($"[update] check failed: {ex.Message}");
         }
     }
 
@@ -805,6 +844,11 @@ public partial class MainWindow : Window
     // -----------------------------------------------------------------
     // EVENT HANDLERS
     // -----------------------------------------------------------------
+    private void ChkShowNpcPresets_Click(object? sender, RoutedEventArgs e)
+    {
+        NpcPresetPanel.IsVisible = ChkShowNpcPresets.IsChecked == true;
+    }
+
     private void TxtCsWinPath_TextChanged(object? sender, TextChangedEventArgs e)
     {
         CheckEnvironmentStatus();

@@ -139,30 +139,37 @@
                                     </DataTemplate>
                                 </ComboBox.ItemTemplate>
                             </ComboBox>
-                            <Grid ColumnDefinitions="*,Auto" Margin="0,8,0,0">
-                                <TextBlock Text="npc preset" Classes="field-label"/>
-                                <TextBlock x:Name="LblNpcPresetStatus" Grid.Column="1"
-                                           Text="loading..." Classes="field-hint"
-                                           VerticalAlignment="Center"/>
-                            </Grid>
-                            <Grid ColumnDefinitions="*,6,84">
-                                <ComboBox x:Name="CmbNpcPreset" Height="42"
-                                          HorizontalAlignment="Stretch"
-                                          SelectionChanged="CmbNpcPreset_SelectionChanged">
-                                    <ComboBox.ItemTemplate>
-                                        <DataTemplate DataType="models:NpcPresetChoice">
-                                            <StackPanel Spacing="1" VerticalAlignment="Center">
-                                                <TextBlock Text="{Binding DisplayName}" FontSize="11.5"
-                                                           FontWeight="SemiBold"
-                                                           Foreground="{StaticResource StudioText}"/>
-                                                <TextBlock Text="{Binding Detail}" Classes="field-hint"/>
-                                            </StackPanel>
-                                        </DataTemplate>
-                                    </ComboBox.ItemTemplate>
-                                </ComboBox>
-                                <Button Grid.Column="2" Classes="utility" Height="42"
-                                        Content="scan vpk" Click="BtnScanNpcPresets_Click"/>
-                            </Grid>
+                            <CheckBox x:Name="ChkShowNpcPresets"
+                                      Margin="0,8,0,0"
+                                      Content="show npc presets"
+                                      IsChecked="False"
+                                      Click="ChkShowNpcPresets_Click"/>
+                            <StackPanel x:Name="NpcPresetPanel" IsVisible="False">
+                                <Grid ColumnDefinitions="*,Auto">
+                                    <TextBlock Text="npc preset" Classes="field-label"/>
+                                    <TextBlock x:Name="LblNpcPresetStatus" Grid.Column="1"
+                                               Text="loading..." Classes="field-hint"
+                                               VerticalAlignment="Center"/>
+                                </Grid>
+                                <Grid ColumnDefinitions="*,6,84">
+                                    <ComboBox x:Name="CmbNpcPreset" Height="42"
+                                              HorizontalAlignment="Stretch"
+                                              SelectionChanged="CmbNpcPreset_SelectionChanged">
+                                        <ComboBox.ItemTemplate>
+                                            <DataTemplate DataType="models:NpcPresetChoice">
+                                                <StackPanel Spacing="1" VerticalAlignment="Center">
+                                                    <TextBlock Text="{Binding DisplayName}" FontSize="11.5"
+                                                               FontWeight="SemiBold"
+                                                               Foreground="{StaticResource StudioText}"/>
+                                                    <TextBlock Text="{Binding Detail}" Classes="field-hint"/>
+                                                </StackPanel>
+                                            </DataTemplate>
+                                        </ComboBox.ItemTemplate>
+                                    </ComboBox>
+                                    <Button Grid.Column="2" Classes="utility" Height="42"
+                                            Content="scan vpk" Click="BtnScanNpcPresets_Click"/>
+                                </Grid>
+                            </StackPanel>
                             <Grid ColumnDefinitions="*,Auto">
                                 <TextBlock x:Name="LblHeroPathsSource" Text="built-in presets" Classes="field-hint"
                                            TextTrimming="CharacterEllipsis" VerticalAlignment="Center"/>

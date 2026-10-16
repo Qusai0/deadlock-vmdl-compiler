@@ -28,6 +28,9 @@ public class AppConfig
     [JsonPropertyName("chk_auto_detect_anims")]
     public bool ChkAutoDetectAnims { get; set; } = true;
 
+    [JsonPropertyName("chk_skip_material_compilation")]
+    public bool ChkSkipMaterialCompilation { get; set; }
+
     [JsonPropertyName("last_vpk_export_dir")]
     public string? LastVpkExportDir { get; set; }
 

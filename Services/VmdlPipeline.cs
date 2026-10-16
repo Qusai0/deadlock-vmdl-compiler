@@ -99,7 +99,9 @@ public static class VmdlPipeline
         }
     }
 
-    public static bool IsValidCsWinDir(string? path)
+    private sealed record CsWinLayout(string CompilerPath, string GameRoot, string ContentRoot);
+
+    private static CsWinLayout? ResolveCsWinLayout(string? path)
     {
         if (string.IsNullOrWhiteSpace(path) || !Directory.Exists(path)) return null;
         var root = Path.TrimEndingDirectorySeparator(Path.GetFullPath(path));
@@ -365,27 +367,19 @@ public static class VmdlPipeline
         Action<string, string>? afterDeploy = null,
         bool autoDetectAnims = true,
         IReadOnlyDictionary<string, string>? expectedNamedGraphs = null,
-        bool skipMaterialCompilation = false)
+        bool skipMaterialCompilation = false,
+        CancellationToken cancellationToken = default,
+        List<string>? compilerErrors = null)
     {
         var cfg = ConfigManager.LoadConfig();
         var useCsWinDir = !string.IsNullOrWhiteSpace(cswinDir) ? cswinDir : cfg.CsWinDir;
         var useCitadelDir = !string.IsNullOrWhiteSpace(citadelAddonsDir) ? citadelAddonsDir : cfg.CitadelAddonsDir;
 
-        var rcExe = Path.Combine(useCsWinDir, "game", "bin", "win64", "resourcecompiler.exe");
-        var csWinGameDir = Path.Combine(useCsWinDir, "game", "csgo");
-
-        if (!File.Exists(rcExe))
-        {
-            var altRcExe = Path.Combine(useCsWinDir, "bin", "win64", "resourcecompiler.exe");
-            if (File.Exists(altRcExe))
-            {
-                rcExe = altRcExe;
-            }
-            else
-            {
-                return (false, $"CSWin64 resourcecompiler.exe not found in: {useCsWinDir}");
-            }
-        }
+        var layout = ResolveCsWinLayout(useCsWinDir);
+        if (layout == null)
+            return (false, $"CSWin64 resourcecompiler.exe not found in: {useCsWinDir}");
+        var rcExe = layout.CompilerPath;
+        var csWinGameDir = Path.Combine(layout.GameRoot, "csgo");
 
         GameInfoMaterialGuard? gameInfoGuard = null;
         if (skipMaterialCompilation)
@@ -499,7 +493,7 @@ public static class VmdlPipeline
             CreateNoWindow = true
         };
 
-        progress?.Report(new CompileProgress(4, 5, 60, "[4/5] compiling model", "resourcecompiler.exe"));
+        progress?.Report(new CompileProgress(60, "[4/5] compiling model", "resourcecompiler.exe"));
         onLog?.Invoke(skipMaterialCompilation
             ? "[compiler] starting: resourcecompiler.exe with material/texture compilation disabled (-skiptype vmat,vtex)"
             : $"[compiler] starting: resourcecompiler.exe -f -i \"{Path.GetFileName(csWinVmdlPath)}\"");
@@ -698,13 +692,6 @@ public static class VmdlPipeline
         return $"-f{skipTypes} -i \"{vmdlPath}\" -game \"{gamePath}\"";
     }
 
-    public static string BuildResourceCompilerArguments(string vmdlPath, string gamePath,
-        bool skipMaterialCompilation)
-    {
-        var skipTypes = skipMaterialCompilation ? " -skiptype vmat,vtex" : string.Empty;
-        return $"-f{skipTypes} -i \"{vmdlPath}\" -game \"{gamePath}\"";
-    }
-
     public static async Task<(bool Success, string Message)> ProcessVmdlFileAsync(
         string filepath,
         string? skelPath = null,
@@ -726,7 +713,9 @@ public static class VmdlPipeline
         Action<string, string>? afterDeploy = null,
         bool autoDetectAnims = true,
         IReadOnlyDictionary<string, string>? namedGraphs = null,
-        bool skipMaterialCompilation = false)
+        bool skipMaterialCompilation = false,
+        CancellationToken cancellationToken = default,
+        List<string>? compilerErrors = null)
     {
         filepath = Path.GetFullPath(filepath);
         if (!File.Exists(filepath))

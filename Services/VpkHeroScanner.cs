@@ -1,4 +1,7 @@
 using System.Text;
+using System.Text.RegularExpressions;
+using DeadlockVmdlCompiler.Models;
+using ValveResourceFormat;
 
 namespace DeadlockVmdlCompiler.Services;
 
