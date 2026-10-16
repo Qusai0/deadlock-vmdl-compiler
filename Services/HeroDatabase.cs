@@ -109,6 +109,17 @@ public static class HeroDatabase
         return visible;
     }
 
+    public static string SaveDatabase(Dictionary<string, HeroPreset> data)
+    {
+        CorrectLegacyPresets(data);
+        var json = JsonSerializer.Serialize(data, new JsonSerializerOptions { WriteIndented = true });
+        var target = GetUserDatabasePath();
+        Directory.CreateDirectory(Path.GetDirectoryName(target)!);
+        File.WriteAllText(target, json);
+        _database = IncludeMissingBuiltInPresets(new Dictionary<string, HeroPreset>(data, StringComparer.OrdinalIgnoreCase));
+        return target;
+    }
+
     private static Dictionary<string, HeroPreset> LoadDatabase(AppConfig? config = null)
     {
         ActiveCustomFilePath = null;

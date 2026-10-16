@@ -1,24 +1,9 @@
 # Changelog
 
-## 1.4.0
+## Unreleased
 
-- Compilation, fix(modeldoc) and CSWin64 export run off the UI thread. ModelDoc parsing no longer rescans the file for every node: a 743 KB hero model with 300 clips prepares in about 0.4 s instead of 4 s, with byte-identical output.
-- The compile button cancels a running compile and stops `resourcecompiler.exe`; nothing is deployed.
-- A mesh or material that cannot be copied to CSWin64 now fails the compile instead of silently compiling the previous copy. Replaced files are detected by size and timestamp, including older ones.
-- Neutral creep models are listed in the addon model menu and can be exported with add addon.
-- fix(modeldoc) and addon export share one comment- and string-aware cleaner; standalone `NmSkeletonReference` nodes are removed by both.
-- Backups are created only when the source `.vmdl` is rewritten, and identical backups are not duplicated.
-- Added **load list...** for custom AG2 preset files.
-- Deployment and packaging resolve the compiled addon directory through the same code, also when an unrelated `content` folder appears earlier in the path. Selecting CSWin64's `game` directory now uses the matching `content` directory.
-- VPK archives are written to a temporary file and swapped in on success; files that change during packaging are rejected; non-ASCII paths verify correctly.
-- Injected nodes keep CRLF line endings and are no longer separated by a comma inside a trailing comment.
-- A missing material no longer aborts add addon. A configured folder on a disconnected drive is kept in settings.
-- Deadlock is located from Steam's Windows uninstall entry first, then the library list and app manifest. Inside the installation the content folder is identified by the game's own `steam.inf` app id and the launcher by the content-folder name it embeds, so no folder or executable names are assumed.
-- 3D preview: materials written by the Material Editor (unquoted keys) now load their textures, Blender `.001` material duplicates resolve to the base material, the first UV set is always used, and additive effect surfaces are left out. Textures are sampled at up to 1024 px with perspective-correct mapping.
-- 3D preview, merged from Qusai0's 1.3.8 work: bilinear texture filtering, compiled `.vtex_c` textures, `TextureAlbedo` and `BaseTexture` colour keys, `F_ALPHA_TEST` cut-outs, DMX `flipVCoordinates`, and a model cache. The cache is now dropped when a mesh, material or texture of the model changes, and the `ValvePak` 4.0 reference that conflicted with the bundled ValveResourceFormat was removed.
-- 3D preview controls: drag orbits with the model following the cursor, right or middle drag (or Shift+drag) pans, the wheel zooms proportionally, double-click, F or **reset view** frames the model. The model is shown at real scale on a half-metre ground grid, lit from the camera, rendered on all cores and at half resolution while a heavy model is dragged.
-- New consistent icon set across the main window and dialogs.
-- Removed unused code: the placeholder mesh statistics, the old launcher, the unused cloth chain generator and VPK preset scanner, and unused settings.
+- Added an opt-in **skip material/texture compilation** setting for newer CSWin64 builds. It passes `-skiptype vmat,vtex`, temporarily disables missing-material fatal errors in CSWin64 `gameinfo.gi`, restores that file after compilation, and preserves the original CSDK material references.
+- Added a startup update check that downloads newer Windows releases from the project's GitHub releases into the local update folder.
 
 ## 1.3.7
 
