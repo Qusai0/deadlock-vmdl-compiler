@@ -13,7 +13,9 @@ public sealed record UpdateResult(
     Version? CurrentVersion = null,
     Version? LatestVersion = null,
     string? ReleaseUrl = null,
-    string? DownloadedExecutablePath = null);
+    string? DownloadedExecutablePath = null,
+    string? AssetUrl = null,
+    string? AssetName = null);
 
 public static class UpdateService
 {
@@ -25,7 +27,7 @@ public static class UpdateService
     public static Version CurrentVersion => NormalizeVersion(
         Assembly.GetExecutingAssembly().GetName().Version ?? new Version(1, 0, 0));
 
-    public static async Task<UpdateResult> CheckAndDownloadAsync(
+    public static async Task<UpdateResult> CheckAsync(
         CancellationToken cancellationToken = default)
     {
         var current = CurrentVersion;
@@ -62,10 +64,9 @@ public static class UpdateService
                     current, latest, releaseUrl);
             }
 
-            var downloadedPath = await DownloadExecutableAsync(asset.Value.Url, asset.Value.Name,
-                latest, cancellationToken);
             return new UpdateResult(true, true,
-                $"downloaded version {latest}.", current, latest, releaseUrl, downloadedPath);
+                $"version {latest} is available.", current, latest, releaseUrl,
+                AssetUrl: asset.Value.Url, AssetName: asset.Value.Name);
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {
@@ -74,6 +75,37 @@ public static class UpdateService
         catch (Exception ex) when (ex is HttpRequestException or IOException or InvalidDataException or JsonException or TaskCanceledException)
         {
             return new UpdateResult(false, false, $"update check failed: {ex.Message}", current);
+        }
+    }
+
+    public static async Task<UpdateResult> DownloadAsync(
+        UpdateResult update,
+        CancellationToken cancellationToken = default)
+    {
+        if (!update.UpdateAvailable || update.LatestVersion == null ||
+            string.IsNullOrWhiteSpace(update.AssetUrl) || string.IsNullOrWhiteSpace(update.AssetName))
+        {
+            return update with { Success = false, Message = "No downloadable update was selected." };
+        }
+
+        try
+        {
+            var downloadedPath = await DownloadExecutableAsync(
+                update.AssetUrl, update.AssetName, update.LatestVersion, cancellationToken);
+            return update with
+            {
+                Success = true,
+                Message = $"downloaded version {update.LatestVersion}.",
+                DownloadedExecutablePath = downloadedPath
+            };
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            throw;
+        }
+        catch (Exception ex) when (ex is HttpRequestException or IOException or InvalidDataException or TaskCanceledException)
+        {
+            return update with { Success = false, Message = $"update download failed: {ex.Message}" };
         }
     }
 

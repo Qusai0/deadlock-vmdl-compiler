@@ -3,7 +3,7 @@
 ## Unreleased
 
 - Added an opt-in **skip material/texture compilation** setting for newer CSWin64 builds. It passes `-skiptype vmat,vtex`, temporarily disables missing-material fatal errors in CSWin64 `gameinfo.gi`, restores that file after compilation, and preserves the original CSDK material references.
-- Added a startup update check that downloads newer Windows releases from the project's GitHub releases into the local update folder.
+- Added a startup update check that asks before downloading newer Windows releases from the project's GitHub releases into the local update folder.
 
 ## 1.3.7
 

@@ -440,29 +440,41 @@ public partial class MainWindow : Window
     {
         try
         {
-            var result = await UpdateService.CheckAndDownloadAsync();
+            var result = await UpdateService.CheckAsync();
             if (!result.UpdateAvailable)
                 return;
 
-            if (!result.Success || string.IsNullOrWhiteSpace(result.DownloadedExecutablePath))
+            if (!result.Success || string.IsNullOrWhiteSpace(result.AssetUrl))
             {
                 Log($"[update] {result.Message}");
                 if (IsVisible)
                 {
                     await DialogService.ShowInfoAsync(this, "update available",
-                        $"version {result.LatestVersion} is available, but it could not be downloaded automatically.\n\n" +
+                        $"version {result.LatestVersion} is available, but no downloadable Windows asset was found.\n\n" +
                         (result.ReleaseUrl ?? "open the project releases page to download it."));
                 }
                 return;
             }
 
-            Log($"[update] downloaded version {result.LatestVersion}: {result.DownloadedExecutablePath}");
-            if (IsVisible)
+            if (!IsVisible || !await DialogService.ShowConfirmAsync(this, "update available",
+                    $"version {result.LatestVersion} is available.\n\nWould you like to download it now?"))
             {
-                await DialogService.ShowInfoAsync(this, "update downloaded",
-                    $"version {result.LatestVersion} was downloaded.\n\n" +
-                    $"run the new executable to update:\n{result.DownloadedExecutablePath}");
+                Log($"[update] version {result.LatestVersion} available; download declined.");
+                return;
             }
+
+            var download = await UpdateService.DownloadAsync(result);
+            if (!download.Success || string.IsNullOrWhiteSpace(download.DownloadedExecutablePath))
+            {
+                Log($"[update] {download.Message}");
+                await DialogService.ShowInfoAsync(this, "update download failed", download.Message);
+                return;
+            }
+
+            Log($"[update] downloaded version {download.LatestVersion}: {download.DownloadedExecutablePath}");
+            await DialogService.ShowInfoAsync(this, "update downloaded",
+                $"version {download.LatestVersion} was downloaded.\n\n" +
+                $"run the new executable to update:\n{download.DownloadedExecutablePath}");
         }
         catch (Exception ex)
         {
