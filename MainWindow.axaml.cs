@@ -472,9 +472,20 @@ public partial class MainWindow : Window
             }
 
             Log($"[update] downloaded version {download.LatestVersion}: {download.DownloadedExecutablePath}");
-            await DialogService.ShowInfoAsync(this, "update downloaded",
-                $"version {download.LatestVersion} was downloaded.\n\n" +
-                $"run the new executable to update:\n{download.DownloadedExecutablePath}");
+            var restart = await DialogService.ShowConfirmAsync(this, "update downloaded",
+                $"version {download.LatestVersion} was downloaded next to the current program.\n\n" +
+                "restart now to apply the update?");
+            if (restart && UpdateService.TryStartRestartWithUpdate(download.DownloadedExecutablePath))
+            {
+                Environment.Exit(0);
+            }
+
+            if (restart)
+            {
+                await DialogService.ShowErrorAsync(this, "update restart failed",
+                    "the update was downloaded, but the program could not restart automatically.\n" +
+                    $"close this copy and run:\n{download.DownloadedExecutablePath}");
+            }
         }
         catch (Exception ex)
         {

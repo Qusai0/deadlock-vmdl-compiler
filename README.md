@@ -36,7 +36,7 @@ Deadlock uses AnimGraph 2 (AG2) animation structures. Standard CSDK12 tooling ca
 - **fix(modeldoc)**: Removes all AG2 nodes from decompiled .vmdl to prevent crash. It uses the same cleaner as addon export, and only writes a backup when the file actually changes.
 - **make vpk...**: Checks the selected compiled model for required AG2 references and refuses to pack if any are missing; requires a compiled Game addon and suggests `pak01_dir.vpk` in that folder as the output location.
 - **export to cswin64**: Copies the prepared source files directly to the CSWin64 workspace for manual inspection.
-- **update check**: On startup, checks the latest stable GitHub release and asks before downloading a newer Windows executable into `%LocalAppData%/DeadlockVmdlCompiler/updates`. The app shows the downloaded path so it can be launched after closing the current copy.
+- **update check**: On startup, checks the latest stable GitHub release and asks before downloading a newer Windows executable beside the current program. It can restart and replace the current executable after the app closes.
 
 ### Environment Paths & Options
 - **Deadlock installation**: Detected from the location Steam registers with Windows for the app, then from Steam's registry/client location, `libraryfolders.vdf`, and `appmanifest_1422450.acf`. Inside the installation the content folder is the one whose `steam.inf` carries Deadlock's app id, and the launcher is the executable that embeds that folder's name; no drive paths, folder names or executable names are assumed. If Steam metadata is unavailable, addon creation still offers manual VPK selection.

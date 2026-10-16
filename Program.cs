@@ -1,4 +1,5 @@
 using Avalonia;
+using DeadlockVmdlCompiler.Services;
 
 namespace DeadlockVmdlCompiler;
 
@@ -7,6 +8,9 @@ class Program
     [STAThread]
     public static void Main(string[] args)
     {
+        if (UpdateService.TryApplyUpdateCommand(args))
+            return;
+
         try
         {
             BuildAvaloniaApp().StartWithClassicDesktopLifetime(args);

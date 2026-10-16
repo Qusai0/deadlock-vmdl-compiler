@@ -1,4 +1,5 @@
 using System.IO.Compression;
+using System.Diagnostics;
 using System.Net.Http.Headers;
 using System.Reflection;
 using System.Text.Json;
@@ -22,10 +23,24 @@ public static class UpdateService
     private const string LatestReleaseApi =
         "https://api.github.com/repos/kwlnd/deadlock-vmdl-compiler/releases/latest";
     private const string ExecutableName = "DeadlockVmdlCompiler.exe";
+    private const string PendingUpdateName = "DeadlockVmdlCompiler.update.exe";
     private static readonly HttpClient Http = CreateHttpClient();
 
     public static Version CurrentVersion => NormalizeVersion(
         Assembly.GetExecutingAssembly().GetName().Version ?? new Version(1, 0, 0));
+
+    public static string CurrentExecutablePath
+    {
+        get
+        {
+            var processPath = Environment.ProcessPath;
+            if (!string.IsNullOrWhiteSpace(processPath) &&
+                Path.GetFileName(processPath).Equals(ExecutableName, StringComparison.OrdinalIgnoreCase))
+                return Path.GetFullPath(processPath);
+
+            return Path.Combine(AppContext.BaseDirectory, ExecutableName);
+        }
+    }
 
     public static async Task<UpdateResult> CheckAsync(
         CancellationToken cancellationToken = default)
@@ -91,7 +106,7 @@ public static class UpdateService
         try
         {
             var downloadedPath = await DownloadExecutableAsync(
-                update.AssetUrl, update.AssetName, update.LatestVersion, cancellationToken);
+                update.AssetUrl, update.AssetName, cancellationToken);
             return update with
             {
                 Success = true,
@@ -107,6 +122,82 @@ public static class UpdateService
         {
             return update with { Success = false, Message = $"update download failed: {ex.Message}" };
         }
+    }
+
+    public static bool TryStartRestartWithUpdate(string stagedPath)
+    {
+        try
+        {
+            if (!IsValidExecutable(stagedPath)) return false;
+
+            var helper = new ProcessStartInfo
+            {
+                FileName = stagedPath,
+                WorkingDirectory = Path.GetDirectoryName(CurrentExecutablePath) ?? AppContext.BaseDirectory,
+                UseShellExecute = true
+            };
+            helper.ArgumentList.Add("--apply-update");
+            helper.ArgumentList.Add(stagedPath);
+            helper.ArgumentList.Add(CurrentExecutablePath);
+            helper.ArgumentList.Add(Environment.ProcessId.ToString());
+            Process.Start(helper);
+            return true;
+        }
+        catch
+        {
+            return false;
+        }
+    }
+
+    public static bool TryApplyUpdateCommand(string[] args)
+    {
+        if (args.Length < 4 || !args[0].Equals("--apply-update", StringComparison.OrdinalIgnoreCase))
+            return false;
+
+        var stagedPath = Path.GetFullPath(args[1]);
+        var targetPath = Path.GetFullPath(args[2]);
+        if (!int.TryParse(args[3], out var parentProcessId))
+            return true;
+
+        try
+        {
+            WaitForParentProcess(parentProcessId);
+            if (!IsValidExecutable(stagedPath))
+                throw new InvalidDataException("The staged update executable is missing or invalid.");
+
+            var backupPath = targetPath + ".previous.exe";
+            if (File.Exists(backupPath)) File.Delete(backupPath);
+            File.Move(targetPath, backupPath, overwrite: true);
+            try
+            {
+                File.Copy(stagedPath, targetPath, overwrite: true);
+            }
+            catch
+            {
+                File.Move(backupPath, targetPath, overwrite: true);
+                throw;
+            }
+
+            try { File.Delete(backupPath); } catch { }
+            Process.Start(new ProcessStartInfo
+            {
+                FileName = targetPath,
+                WorkingDirectory = Path.GetDirectoryName(targetPath) ?? AppContext.BaseDirectory,
+                UseShellExecute = true
+            });
+        }
+        catch (Exception ex)
+        {
+            try
+            {
+                var logPath = Path.Combine(Path.GetDirectoryName(targetPath) ?? AppContext.BaseDirectory,
+                    "update_error.log");
+                File.WriteAllText(logPath, ex.ToString());
+            }
+            catch { }
+        }
+
+        return true;
     }
 
     private static HttpClient CreateHttpClient()
@@ -155,22 +246,13 @@ public static class UpdateService
     private static async Task<string> DownloadExecutableAsync(
         string url,
         string assetName,
-        Version version,
         CancellationToken cancellationToken)
     {
-        var updateDirectory = Path.Combine(
-            Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
-            "DeadlockVmdlCompiler", "updates");
-        Directory.CreateDirectory(updateDirectory);
-
-        var versionLabel = version.ToString(3);
-        var destination = Path.Combine(updateDirectory,
-            $"DeadlockVmdlCompiler-v{versionLabel}.exe");
-        if (IsValidExecutable(destination))
-            return destination;
+        var updateDirectory = Path.GetDirectoryName(CurrentExecutablePath) ?? AppContext.BaseDirectory;
+        var destination = Path.Combine(updateDirectory, PendingUpdateName);
 
         var temporary = Path.Combine(updateDirectory,
-            $"DeadlockVmdlCompiler-v{versionLabel}.{Guid.NewGuid():N}.download");
+            $"{PendingUpdateName}.{Guid.NewGuid():N}.download");
         try
         {
             using var response = await Http.GetAsync(url, HttpCompletionOption.ResponseHeadersRead, cancellationToken);
@@ -203,6 +285,20 @@ public static class UpdateService
                 if (File.Exists(temporary)) File.Delete(temporary);
             }
             catch { }
+        }
+    }
+
+    private static void WaitForParentProcess(int processId)
+    {
+        try
+        {
+            using var parent = Process.GetProcessById(processId);
+            if (!parent.WaitForExit(30_000))
+                throw new IOException("The previous program instance did not exit in time.");
+        }
+        catch (ArgumentException)
+        {
+            // The parent already exited.
         }
     }
 
