@@ -1417,6 +1417,7 @@ public partial class MainWindow : Window
             var revert = ChkRevert.IsChecked == true;
             var disableAnimationList = ChkDisableAnimList.IsChecked == true;
             var autoDetectAnims = ChkAutoDetectAnims.IsChecked == true;
+            var skipMaterialCompilation = ChkSkipMaterialCompilation.IsChecked == true;
             TxtCompileBtn.Text = "cancel compile";
 
             // Show real-time compilation progress bar under compile button
@@ -1456,9 +1457,12 @@ public partial class MainWindow : Window
                 revertVmdl: revert,
                 cswinDir: csWinDir,
                 citadelAddonsDir: citadelDir,
-                disableAnimationList: ChkDisableAnimList.IsChecked == true,
-                autoDetectAnims: ChkAutoDetectAnims.IsChecked == true,
-                skipMaterialCompilation: ChkSkipMaterialCompilation.IsChecked == true,
+                // Read Avalonia controls before entering Task.Run. Accessing a
+                // control from the compiler worker thread causes "Call from
+                // invalid thread" exceptions.
+                disableAnimationList: disableAnimationList,
+                autoDetectAnims: autoDetectAnims,
+                skipMaterialCompilation: skipMaterialCompilation,
                 namedGraphs: namedGraphs,
                 progress: progress,
                 onLog: Log,
